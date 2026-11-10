@@ -1,0 +1,69 @@
+services:
+  mysql:
+    image: mysql:${MYSQL_IMAGE_TAG:-8.4}
+    container_name: localmind-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-admin}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-localmind}
+      MYSQL_USER: ${MYSQL_USER:-localmind}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-localmind}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$${MYSQL_ROOT_PASSWORD} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - localmind-net
+
+  qdrant:
+    image: qdrant/qdrant:${QDRANT_IMAGE_TAG:-v1.20.1}
+    container_name: localmind-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - localmind-net
+
+  searxng:
+    image: searxng/searxng:${SEARXNG_IMAGE_TAG:-2026.11.12-de722ab1b}
+    container_name: localmind-searxng
+    restart: unless-stopped
+    ports:
+      - "${SEARXNG_PORT:-8081}:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-localmind_searxng_secret_key}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/ > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - localmind-net
+
+volumes:
+  mysql-data:
+    driver: local
+  qdrant-data:
+    driver: local
+
+networks:
+  localmind-net:
+    driver: bridge
