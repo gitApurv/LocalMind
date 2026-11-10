@@ -1,0 +1,79 @@
+spring:
+  application:
+    name: localmind
+  threads:
+    virtual:
+      enabled: true
+  servlet:
+    multipart:
+      max-file-size: ${UPLOAD_MAX_FILE_SIZE:25MB}
+      max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:30MB}
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:localmind}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: ${MYSQL_USER:localmind}
+    password: ${MYSQL_PASSWORD:localmind}
+  jpa:
+    hibernate:
+      ddl-auto: ${JPA_DDL_AUTO:update}
+    open-in-view: false
+    show-sql: ${JPA_SHOW_SQL:false}
+  ai:
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://127.0.0.1:11434}
+      chat:
+        options:
+          model: ${OLLAMA_CHAT_MODEL:gemma3:1b}
+      embedding:
+        options:
+          model: ${OLLAMA_EMBEDDING_MODEL:nomic-embed-text}
+    vectorstore:
+      qdrant:
+        host: ${QDRANT_HOST:127.0.0.1}
+        port: ${QDRANT_GRPC_PORT:6334}
+        collection-name: ${QDRANT_COLLECTION:localmind_vectors}
+        initialize-schema: true
+
+server:
+  port: ${SERVER_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+
+localmind:
+  jwt:
+    access-token-expiration: ${JWT_ACCESS_TOKEN_EXPIRATION:15m}
+    refresh-token-expiration: ${JWT_REFRESH_TOKEN_EXPIRATION:7d}
+    cookie-secure: ${JWT_COOKIE_SECURE:false}
+    cookie-same-site: ${JWT_COOKIE_SAME_SITE:Strict}
+    key-file: ${JWT_KEY_FILE:./data/jwt-signing-key.pem}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://127.0.0.1:3000}
+  llm:
+    default-model: ${OLLAMA_CHAT_MODEL:gemma3:1b}
+    ollama-base-url: ${OLLAMA_BASE_URL:http://127.0.0.1:11434}
+  qdrant:
+    collection-name: ${QDRANT_COLLECTION:localmind_vectors}
+  storage:
+    upload-dir: ${UPLOAD_DIR:./uploads}
+    max-file-size: ${UPLOAD_MAX_FILE_SIZE:25MB}
+    allowed-extensions: ${UPLOAD_ALLOWED_EXTENSIONS:pdf,txt,docx,md}
+  prompt:
+    rag:
+      auto: ${PROMPT_RAG_AUTO:true}
+    memory:
+      semantic: ${PROMPT_MEMORY_SEMANTIC:true}
+    history:
+      token-trim: ${PROMPT_HISTORY_TOKEN_TRIM:true}
+    stats:
+      enabled: ${PROMPT_STATS_ENABLED:true}
+  tools:
+    searxng:
+      base-url: ${SEARXNG_BASE_URL:http://127.0.0.1:8081}
+    scraper:
+      allow-private-subnets: ${SCRAPER_ALLOW_PRIVATE_SUBNETS:false}
