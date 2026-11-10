@@ -1,0 +1,9 @@
+node_modules/
+.next/
+target/
+docker/data/
+uploads/
+package-lock.json
+.git/
+.system_generated/
+*.log

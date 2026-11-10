@@ -1,0 +1,52 @@
+# EditorConfig is awesome: https://EditorConfig.org
+
+# Top-most EditorConfig file
+root = true
+
+# Global defaults for all files
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Java source files
+[*.java]
+indent_style = space
+indent_size = 4
+
+# Python scripts
+[*.py]
+indent_style = space
+indent_size = 4
+
+# Shell scripts
+[*.{sh,bash}]
+indent_style = space
+indent_size = 2
+end_of_line = lf
+
+# PowerShell scripts
+[*.{ps1,psm1}]
+indent_style = space
+indent_size = 4
+
+# Frontend / Web assets (TypeScript, JavaScript, JSON, YAML, CSS, HTML)
+[*.{js,jsx,ts,tsx,json,yml,yaml,css,scss,html}]
+indent_style = space
+indent_size = 2
+
+# Markdown documentation (preserve trailing spaces for linebreaks)
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+# Windows-only scripts must keep CRLF to run under cmd.exe
+[*.{cmd,bat}]
+end_of_line = crlf
+
+# Makefiles require hard tabs
+[Makefile]
+indent_style = tab
