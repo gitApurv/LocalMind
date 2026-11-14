@@ -147,3 +147,97 @@ com.localmind
 - Web tests use `MockMvc` with `SecurityMockMvcRequestPostProcessors.jwt()`.
 - Every behaviour change ships with a test; `./mvnw verify` (tests + Spotless check) must pass before committing, with no infrastructure running.
 
+## Frontend Coding Pattern (Next.js, `frontend/`)
+
+Every frontend change must follow this pattern. When touching code that predates it, bring that code in line. Formatting is covered by "Formatting Rules" above (Prettier, 2 spaces, 100 columns, LF).
+
+### 1. Feature folders
+
+Code is grouped first by feature, mirroring the backend's package-by-feature, then by layer inside each feature. Every feature uses the same layer folders and creates only the ones it needs:
+
+| Folder | Contains |
+| --- | --- |
+| `api/` | `<feature>-api.ts`: typed functions over `apiClient`, the only place backend URLs appear |
+| `components/` | React components of the feature |
+| `hooks/` | `use-*.ts` hooks that combine stores, effects and APIs (streaming, polling, bootstrap) |
+| `store/` | Zustand stores (`<name>-store.ts`) |
+| `lib/` | Pure logic without React, stores or `apiClient`: parsers, validation, formatting |
+| `types.ts` | Types mirroring the backend DTOs and requests of this feature |
+| `constants.ts` | Literals used in more than one file (default titles, model presets, suggestions) |
+
+```text
+frontend/src
+├── app/                    # Next.js routes only: layout.tsx, page.tsx, login/, register/
+├── components/ui/          # design-system primitives (Button, Card, Input, Alert), no feature logic
+├── lib/                    # cross-cutting, no feature logic
+│   ├── api-client.ts       # fetch wrapper: bearer token, refresh cookie, 401 refresh queue
+│   ├── api-error.ts        # ApiError, getErrorMessage(), isAbortError()
+│   └── utils.ts            # cn()
+├── features/
+│   ├── auth/               # login, register, session refresh, profile
+│   │   ├── api/  components/  hooks/  lib/  store/  types.ts
+│   ├── workspace/          # authenticated app shell: auth gate, sidebar, user menu
+│   │   ├── components/  hooks/
+│   ├── conversations/      # thread list, create/rename/pin/delete, active thread
+│   │   ├── api/  components/  store/  constants.ts  types.ts
+│   ├── chat/               # messages, SSE streaming, composer, markdown rendering
+│   │   ├── api/  components/  hooks/  lib/  store/  constants.ts  types.ts
+│   ├── attachments/        # document upload and ingestion status polling
+│   │   ├── api/  components/  hooks/  lib/  types.ts
+│   ├── models/             # model catalogue, model selection, tools toggle
+│   │   ├── api/  components/  lib/  store/  constants.ts  types.ts
+│   └── settings/           # profile and custom-instructions dialog
+│       └── components/
+└── test/                   # shared test factories (aConversation, resetWorkspaceStores)
+```
+
+- A feature may import another feature's `api`, `store`, `hooks`, `components` and `types`. `lib/` and `components/ui/` import no feature. No import cycles between files.
+- Import other features and shared code with the `@/` alias (`@/features/chat/store/chat-store`), files of the same feature with relative paths (`./`, `../store/...`). No barrel `index.ts` files.
+- One exported component per file (small private sub-components may stay in the same file).
+
+### 2. Layer responsibilities
+
+| Layer | Does | Does not |
+| --- | --- | --- |
+| Route (`app/**/page.tsx`, `layout.tsx`) | Metadata, compose one feature component | Hold state, call APIs, contain feature markup |
+| Component | Render, local UI state (`useState`), read stores via selectors, call store actions or hooks | Call `apiClient`/`fetch`, know URLs, parse server data |
+| Hook (`useX`) | Effects and orchestration shared by components: streaming, polling, bootstrap | Render JSX |
+| Store (`useXStore`) | State shared across components and the async actions that change it | Touch the DOM, use React hooks, build URLs |
+| API (`xApi`) | One typed function per endpoint, returning the parsed body | Hold state, catch errors, show UI |
+| `lib/` function | Pure logic, unit-testable without React | Import React, stores or `apiClient` |
+
+### 3. Naming
+
+- Files and folders are `kebab-case`: `conversation-list.tsx`, `use-chat-stream.ts`, `chat-store.ts`, `chat-api.ts`.
+- Components are `PascalCase` named exports (`export function ConversationList`). Default exports only where Next.js requires them (route files).
+- Props types are `XProps`; hooks `useX`; stores `useXStore`; API objects `xApi`; request bodies `XRequest`; domain types use the backend's noun without suffix (`Conversation` for `ConversationResponse`).
+- Constants are `UPPER_SNAKE_CASE` and live in the feature's `constants.ts`. No duplicated literals (default title `"New Chat"`, model names, tool names).
+
+### 4. State & data fetching
+
+- Zustand holds only state shared by more than one component; everything else is local `useState`.
+- Read stores with one selector per value: `const messages = useChatStore((s) => s.messages)`. Never destructure the whole store (`const { a, b } = useStore()`), which re-renders on every change. Outside React, use `useXStore.getState()`.
+- Async actions live in the store and call the feature's `api/`. A store may call another feature's store through `getState()` inside an action (e.g. conversations resets the chat store on switch); stores never subscribe to each other.
+- Server data used by a single component subtree (e.g. attachments with polling) is loaded in a feature hook, not a store.
+- The browser calls same-origin `/api/**`; `next.config.mjs` rewrites to `BACKEND_API_URL`. Only `lib/api-client.ts` and `api/` modules issue requests; streaming goes through `apiClient.stream()` so it gets the same headers, refresh and error handling.
+
+### 5. Errors
+
+- `apiClient` throws `ApiError { status, message, errors? }`: `message` comes from the backend's ProblemDetail `message` property, `status` 0 means a network failure. An aborted request rethrows the original `AbortError`.
+- Catch as `unknown` and read the text with `getErrorMessage(err, fallback)`. No `any` (enforced by ESLint).
+- Actions whose result the UI shows (login, save profile, create conversation) set the store `error` and rethrow; background loads (lists, models) log with `console.error` and keep the previous state.
+- User-visible errors are rendered with the `Alert` primitive; never `alert()`.
+
+### 6. Styling
+
+- Tailwind utilities with the theme tokens from `app/globals.css` (`bg-background`, `text-primary`, `border-border`); no raw hex colours except syntax highlighting.
+- Tailwind scans `src/**` (`tailwind.config.ts`); keep class names as literal strings so it can find them.
+- Combine conditional classes with `cn()`, not template strings. Reusable variants use `cva` in `components/ui/`.
+- Accessibility: every interactive element is a real `button`/`input` or has a role, and icon-only buttons have an `aria-label`.
+
+### 7. Tests
+
+- Vitest + Testing Library on jsdom. Tests sit in a `__tests__/` folder next to the file under test, named `<file>.test.ts(x)`.
+- Mock HTTP with `vi.spyOn(apiClient, ...)` or a stubbed `global.fetch`; never mock the module under test. Reset every store used with `setState` in `beforeEach` (`resetWorkspaceStores()` from `@/test/factories`) and build fixtures with the factories there.
+- Query by role, label or visible text, not by class names.
+- Every behaviour change ships with a test. Before committing, all of these pass in `frontend/`: `npm run lint`, `npm run typecheck`, `npm test`, `npm run format:check`, `npm run build`.
