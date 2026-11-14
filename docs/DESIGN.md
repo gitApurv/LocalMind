@@ -202,8 +202,8 @@ Background updates never save a conversation entity loaded earlier. The end of a
   ```
 
 - **Non-bypassable tenant filters** (`common.ai.VectorFilters`), applied to every search and delete:
-  - Document chunks: $(\text{userId} = u) \land (\text{conversationId} = c) \land (\text{type} = \text{DOC\_CHUNK})$
-  - Memories: $(\text{userId} = u) \land (\text{type} = \text{USER\_MEMORY})$, plus $\text{memoryId}$ when deleting one memory.
+  - Document chunks: $`(\text{userId} = u) \land (\text{conversationId} = c) \land (\text{type} = \text{DOC\_CHUNK})`$
+  - Memories: $`(\text{userId} = u) \land (\text{type} = \text{USER\_MEMORY})`$, plus $\text{memoryId}$ when deleting one memory.
 
 ### 3.4 Binary File Storage
 
@@ -317,14 +317,14 @@ data:{"type":"CONTENT","content":"Hello"}
 
 ### 5.2 Event Taxonomy
 
-| Event Type   | Attributes                                    | Meaning                                                   |
-| :----------- | :-------------------------------------------- | :-------------------------------------------------------- |
-| `CONTENT`    | `{"type":"CONTENT","content":"..."}`          | Answer text chunk (Markdown)                              |
-| `REASONING`  | `{"type":"REASONING","content":"..."}`        | Text inside `<think>…</think>`, split out by `StreamingTagParser` (handles tags cut across chunks) |
-| `TOOL_START` | `{"type":"TOOL_START","tool":"searchWeb"}`    | A tool call started                                       |
-| `TOOL_END`   | `{"type":"TOOL_END","tool":"searchWeb"}`      | The tool call finished                                    |
-| `ERROR`      | `{"type":"ERROR","content":"..."}`            | A fixed user-facing error message; the stream then ends   |
-| `DONE`       | `{"type":"DONE","messageId":"<uuid>"}`        | Stream completed; the assistant message was persisted     |
+| Event Type   | Attributes                                 | Meaning                                                                                            |
+| :----------- | :----------------------------------------- | :------------------------------------------------------------------------------------------------- |
+| `CONTENT`    | `{"type":"CONTENT","content":"..."}`       | Answer text chunk (Markdown)                                                                       |
+| `REASONING`  | `{"type":"REASONING","content":"..."}`     | Text inside `<think>…</think>`, split out by `StreamingTagParser` (handles tags cut across chunks) |
+| `TOOL_START` | `{"type":"TOOL_START","tool":"searchWeb"}` | A tool call started                                                                                |
+| `TOOL_END`   | `{"type":"TOOL_END","tool":"searchWeb"}`   | The tool call finished                                                                             |
+| `ERROR`      | `{"type":"ERROR","content":"..."}`         | A fixed user-facing error message; the stream then ends                                            |
+| `DONE`       | `{"type":"DONE","messageId":"<uuid>"}`     | Stream completed; the assistant message was persisted                                              |
 
 Ownership and validation are checked before the stream starts, so those failures are ordinary HTTP errors (Section 4.2), not SSE events. The async request timeout is 3 minutes.
 
@@ -415,8 +415,8 @@ sequenceDiagram
 ```
 
 1. **Tier 1 — Capability discovery (`llm.service.ModelCatalogService`):** `GET /api/models` reads Ollama's `/api/tags`. If a model reports `capabilities`, `supportsTools` is `"tools" ∈ capabilities`. Otherwise the static `ModelProfileRegistry` decides: known profiles (`gemma3:1b`, `qwen2.5:7b`, `deepseek-r1:1.5b`, `deepseek-r1:8b`) or, for unknown names, whether the name contains `tools`, `qwen`, `llama` or `mistral`. The same service answers `supportsTools(model)` for the chat pipeline, with the tag list cached for one minute, so the UI and the backend always agree.
-2. **Tier 2 — Client gating (`features/models`):** `useModelStore` keeps a `modelCapabilities` map from the model list and turns `toolsEnabled` off whenever the selected model does not support tools. `ModelSelector`'s Tools switch is then disabled and labelled *"<model> does not support tools"*.
-3. **Tier 3 — Server-side bypass & error translation (`ToolSelector`, `ChatOrchestratorService`):** `ToolSelector` registers no tools when `supportsTools(model)` is false, even if the client sent `toolsEnabled: true`, so no schema reaches Ollama. If a rejection still happens (e.g. capabilities changed after caching), the stream error is inspected (including causes and suppressed exceptions) and the client gets the `ERROR` event *"Model '<model>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model (e.g., qwen2.5:7b)."*
+2. **Tier 2 — Client gating (`features/models`):** `useModelStore` keeps a `modelCapabilities` map from the model list and turns `toolsEnabled` off whenever the selected model does not support tools. `ModelSelector`'s Tools switch is then disabled and labelled *"\<model\> does not support tools"*.
+3. **Tier 3 — Server-side bypass & error translation (`ToolSelector`, `ChatOrchestratorService`):** `ToolSelector` registers no tools when `supportsTools(model)` is false, even if the client sent `toolsEnabled: true`, so no schema reaches Ollama. If a rejection still happens (e.g. capabilities changed after caching), the stream error is inspected (including causes and suppressed exceptions) and the client gets the `ERROR` event *"Model '\<model\>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model (e.g., qwen2.5:7b)."*
 
 ---
 
@@ -439,7 +439,7 @@ sequenceDiagram
     API->>DB: INSERT attachment (status = PROCESSING)
     API-->>User: 202 Accepted { attachmentId, status: "PROCESSING" }
 
-    Note over API, ETL: After commit (TransactionHooks); on rollback the file is deleted
+    Note over API, ETL: After commit (TransactionHooks), on rollback the file is deleted
     API->>ETL: processAttachment(id) on a virtual thread
     ETL->>Disk: Load file
     ETL->>ETL: Apache Tika text extraction (max 5,000,000 chars)
@@ -459,18 +459,18 @@ On failure the attachment is marked `FAILED` with a fixed explanatory message; d
 
 ## 8. Threat Model & Security Posture (STRIDE)
 
-| Threat Category            | Potential Vector                                                     | LocalMind Mitigation                                                                                                                                                         |
-| :------------------------- | :------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Spoofing**               | Forged access tokens                                                 | RS256 signature and expiry verified by the Nimbus resource server; signing key kept in a private file.                                                                        |
-| **Spoofing**               | Stolen refresh token                                                 | HttpOnly `SameSite=Strict` cookie scoped to `/api/auth`, stored only as a hash, rotated on every use; reuse after the 10 s grace window revokes all of the user's sessions. |
-| **Tampering**              | Tool arguments targeting another user's data                         | `userId`/`conversationId` come from the server-built `ToolContext`, not from model arguments.                                                                                 |
-| **Repudiation**            | Denying generations or tool actions                                  | Every turn is stored in `messages`, including reasoning, token estimates and the tool-call audit (`tool_calls`).                                                              |
-| **Information Disclosure** | Cross-tenant data access (IDOR, vector search)                       | `OwnershipGuard` and `findByIdAndUserId` on every resource; `VectorFilters` on every Qdrant search and delete.                                                                |
-| **Information Disclosure** | Internal details in errors or monitoring                             | Generic ProblemDetail/SSE/tool messages, details only in logs; only `/actuator/health` is public and its details require authentication.                                      |
-| **Information Disclosure** | Deleted documents remaining searchable                               | Conversation deletion removes stored files and Qdrant chunks after commit.                                                                                                     |
-| **Denial of Service**      | Tool loops, huge uploads, huge prompts                               | 5 tool calls per turn; 25 MB upload limit; Tika 5M-character cap; request size limits (`message` 32,000 chars, `systemPrompt` 8,000).                                       |
-| **Denial of Service**      | Unsupported tool schemas on small models (Ollama HTTP 400)           | Three-tier capability guardrail (Section 6.3).                                                                                                                                 |
-| **Elevation of Privilege** | SSRF through the page reader; path traversal through file names      | Manual redirects with a per-hop address check over all private/special ranges, `http`/`https` only; file names sanitised and confined to the user's upload directory.        |
+| Threat Category            | Potential Vector                                                | LocalMind Mitigation                                                                                                                                                        |
+| :------------------------- | :-------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Spoofing**               | Forged access tokens                                            | RS256 signature and expiry verified by the Nimbus resource server; signing key kept in a private file.                                                                      |
+| **Spoofing**               | Stolen refresh token                                            | HttpOnly `SameSite=Strict` cookie scoped to `/api/auth`, stored only as a hash, rotated on every use; reuse after the 10 s grace window revokes all of the user's sessions. |
+| **Tampering**              | Tool arguments targeting another user's data                    | `userId`/`conversationId` come from the server-built `ToolContext`, not from model arguments.                                                                               |
+| **Repudiation**            | Denying generations or tool actions                             | Every turn is stored in `messages`, including reasoning, token estimates and the tool-call audit (`tool_calls`).                                                            |
+| **Information Disclosure** | Cross-tenant data access (IDOR, vector search)                  | `OwnershipGuard` and `findByIdAndUserId` on every resource; `VectorFilters` on every Qdrant search and delete.                                                              |
+| **Information Disclosure** | Internal details in errors or monitoring                        | Generic ProblemDetail/SSE/tool messages, details only in logs; only `/actuator/health` is public and its details require authentication.                                    |
+| **Information Disclosure** | Deleted documents remaining searchable                          | Conversation deletion removes stored files and Qdrant chunks after commit.                                                                                                  |
+| **Denial of Service**      | Tool loops, huge uploads, huge prompts                          | 5 tool calls per turn; 25 MB upload limit; Tika 5M-character cap; request size limits (`message` 32,000 chars, `systemPrompt` 8,000).                                       |
+| **Denial of Service**      | Unsupported tool schemas on small models (Ollama HTTP 400)      | Three-tier capability guardrail (Section 6.3).                                                                                                                              |
+| **Elevation of Privilege** | SSRF through the page reader; path traversal through file names | Manual redirects with a per-hop address check over all private/special ranges, `http`/`https` only; file names sanitised and confined to the user's upload directory.       |
 
 ---
 

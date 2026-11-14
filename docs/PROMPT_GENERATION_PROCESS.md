@@ -316,7 +316,7 @@ The advisor never changes the request.
    - Bumps `conversations.updated_at` with `ConversationRepository.touch(...)`, a targeted update that never overwrites a concurrent rename or pin.
    - Emits `DONE` with the saved message ID.
    - Calls `AutoTitleService.generateTitleAsync(...)`. It runs after every completed turn but only acts while the title is still the placeholder `New Chat`: the model proposes a 3–5 word title (think blocks, quotes and `Title:` prefixes stripped, max 50 characters) and `replacePlaceholderTitle` stores it only if the user has not renamed the conversation meanwhile.
-4. **On model error:** the partial answer is saved and an `ERROR` event is sent. If Ollama says the model does not support tools, the message is *"Model '<model>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model (e.g., qwen2.5:7b)."*; otherwise a generic message asks the user to check Ollama. Details are only logged.
+4. **On model error:** the partial answer is saved and an `ERROR` event is sent. If Ollama says the model does not support tools, the message is *"Model '\<model\>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model (e.g., qwen2.5:7b)."*; otherwise a generic message asks the user to check Ollama. Details are only logged.
 5. **On client disconnect:** the upstream Ollama subscription is disposed and the partial answer is saved.
 
 ---
@@ -371,7 +371,7 @@ Defined in `com.localmind.llm.service.ModelProfileRegistry`. A model matches a p
 
 | Model Identifier        | `numCtx` | `outputReserve` | `ragBudget` | `historyBudget` | `toolSupported` (fallback) |
 | :---------------------- | :------: | :-------------: | :---------: | :-------------: | :------------------------: |
-| `gemma3:1b` _(Default)_ |  8,192   |      1,600      |    2,000    |      3,400      |          `false`           |
+| `gemma3:1b` *(Default)* |  8,192   |      1,600      |    2,000    |      3,400      |          `false`           |
 | `qwen2.5:7b`            |  16,384  |      2,048      |    4,000    |      8,000      |           `true`           |
 | `deepseek-r1:1.5b`      |  8,192   |      2,048      |    2,000    |      3,000      |          `false`           |
 | `deepseek-r1:8b`        |  16,384  |      4,096      |    4,000    |      6,000      |          `false`           |
@@ -392,12 +392,12 @@ Defined in `com.localmind.llm.service.ModelProfileRegistry`. A model matches a p
 
 All values are bound from `application.yml`; each can be overridden with the environment variable shown.
 
-| Property Key                          | Environment Variable        |      Default Value      | Description                                                      |
-| :------------------------------------ | :-------------------------- | :---------------------: | :--------------------------------------------------------------- |
-| `localmind.prompt.stats.enabled`      | `PROMPT_STATS_ENABLED`      |         `true`          | Token accounting log (`PromptStatsAdvisor`)                      |
-| `localmind.prompt.history.token-trim` | `PROMPT_HISTORY_TOKEN_TRIM` |         `true`          | History and summary injection (`HistoryAdvisor`); `false` sends no history |
-| `localmind.prompt.memory.semantic`    | `PROMPT_MEMORY_SEMANTIC`    |         `true`          | Semantic memory retrieval (`MemoryRetrievalAdvisor`)             |
-| `localmind.prompt.rag.auto`           | `PROMPT_RAG_AUTO`           |         `true`          | Automatic document excerpts (`AutoRagAdvisor`)                   |
-| `localmind.llm.default-model`         | `OLLAMA_CHAT_MODEL`         |       `gemma3:1b`       | Model used when neither the request nor the conversation sets one |
-| `spring.ai.ollama.base-url`           | `OLLAMA_BASE_URL`           | `http://127.0.0.1:11434` | Ollama endpoint (same variable feeds `localmind.llm.ollama-base-url`) |
-| `localmind.tools.searxng.base-url`    | `SEARXNG_BASE_URL`          | `http://127.0.0.1:8081` | SearXNG instance for `searchWeb`                                 |
+| Property Key                          | Environment Variable        |      Default Value       | Description                                                                |
+| :------------------------------------ | :-------------------------- | :----------------------: | :------------------------------------------------------------------------- |
+| `localmind.prompt.stats.enabled`      | `PROMPT_STATS_ENABLED`      |          `true`          | Token accounting log (`PromptStatsAdvisor`)                                |
+| `localmind.prompt.history.token-trim` | `PROMPT_HISTORY_TOKEN_TRIM` |          `true`          | History and summary injection (`HistoryAdvisor`); `false` sends no history |
+| `localmind.prompt.memory.semantic`    | `PROMPT_MEMORY_SEMANTIC`    |          `true`          | Semantic memory retrieval (`MemoryRetrievalAdvisor`)                       |
+| `localmind.prompt.rag.auto`           | `PROMPT_RAG_AUTO`           |          `true`          | Automatic document excerpts (`AutoRagAdvisor`)                             |
+| `localmind.llm.default-model`         | `OLLAMA_CHAT_MODEL`         |       `gemma3:1b`        | Model used when neither the request nor the conversation sets one          |
+| `spring.ai.ollama.base-url`           | `OLLAMA_BASE_URL`           | `http://127.0.0.1:11434` | Ollama endpoint (same variable feeds `localmind.llm.ollama-base-url`)      |
+| `localmind.tools.searxng.base-url`    | `SEARXNG_BASE_URL`          | `http://127.0.0.1:8081`  | SearXNG instance for `searchWeb`                                           |

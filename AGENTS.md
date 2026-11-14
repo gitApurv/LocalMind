@@ -195,7 +195,7 @@ frontend/src
 - Import other features and shared code with the `@/` alias (`@/features/chat/store/chat-store`), files of the same feature with relative paths (`./`, `../store/...`). No barrel `index.ts` files.
 - One exported component per file (small private sub-components may stay in the same file).
 
-### 2. Layer responsibilities
+### 2. Frontend layer responsibilities
 
 | Layer | Does | Does not |
 | --- | --- | --- |
@@ -221,7 +221,7 @@ frontend/src
 - Server data used by a single component subtree (e.g. attachments with polling) is loaded in a feature hook, not a store.
 - The browser calls same-origin `/api/**`; `next.config.mjs` rewrites to `BACKEND_API_URL`. Only `lib/api-client.ts` and `api/` modules issue requests; streaming goes through `apiClient.stream()` so it gets the same headers, refresh and error handling.
 
-### 5. Errors
+### 5. Frontend errors
 
 - `apiClient` throws `ApiError { status, message, errors? }`: `message` comes from the backend's ProblemDetail `message` property, `status` 0 means a network failure. An aborted request rethrows the original `AbortError`.
 - Catch as `unknown` and read the text with `getErrorMessage(err, fallback)`. No `any` (enforced by ESLint).
@@ -235,7 +235,7 @@ frontend/src
 - Combine conditional classes with `cn()`, not template strings. Reusable variants use `cva` in `components/ui/`.
 - Accessibility: every interactive element is a real `button`/`input` or has a role, and icon-only buttons have an `aria-label`.
 
-### 7. Tests
+### 7. Frontend tests
 
 - Vitest + Testing Library on jsdom. Tests sit in a `__tests__/` folder next to the file under test, named `<file>.test.ts(x)`.
 - Mock HTTP with `vi.spyOn(apiClient, ...)` or a stubbed `global.fetch`; never mock the module under test. Reset every store used with `setState` in `beforeEach` (`resetWorkspaceStores()` from `@/test/factories`) and build fixtures with the factories there.

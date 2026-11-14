@@ -214,7 +214,7 @@ Every setting uses a `${VARIABLE:default}` placeholder in `backend/src/main/reso
 | `JWT_COOKIE_SECURE`            | `false`                                       | backend          | Set `true` behind HTTPS                                                                 |
 | `UPLOAD_DIR`                   | `./uploads`                                   | backend          | Attachment storage directory                                                            |
 | `UPLOAD_MAX_FILE_SIZE`         | `25MB`                                        | backend          | Max upload size                                                                         |
-| `BACKEND_API_URL`              | `http://localhost:8080`                       | frontend         | Backend the Next.js server proxies `/api/**` to; read at `next build` (and `next dev`) |
+| `BACKEND_API_URL`              | `http://localhost:8080`                       | frontend         | Backend the Next.js server proxies `/api/**` to; read at `next build` (and `next dev`)  |
 
 See `application.yml` for the remaining switches (`JPA_*`, `PROMPT_*`, `UPLOAD_ALLOWED_EXTENSIONS`, `SCRAPER_ALLOW_PRIVATE_SUBNETS`) and `docker/.env.example` for the image tags.
 
