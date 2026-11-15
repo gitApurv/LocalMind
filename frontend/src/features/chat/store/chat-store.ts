@@ -1,7 +1,9 @@
 import { create } from "zustand";
+import { useConversationStore } from "@/features/conversations/store/conversation-store";
 import { chatApi } from "../api/chat-api";
+import { PERSONA_PRESETS } from "../constants";
 import { toMessage } from "../lib/to-message";
-import type { Message } from "../types";
+import type { Message, ToolCallRecord } from "../types";
 
 export interface ChatState {
   messages: Message[];
@@ -11,12 +13,18 @@ export interface ChatState {
   activeTool: string | null;
   /** Seconds the model spent reasoning before the first content token. */
   reasoningDuration: number | null;
+  /** Active persona preset id for this conversation. */
+  activePersonaId: string;
+  /** Custom system prompt when activePersonaId is 'custom'. */
+  customPersonaPrompt: string;
 
   /**
    * Replaces the thread with the messages of `conversationId` (empty for null). Stops a running
    * stream first so its tokens cannot land in the newly opened thread.
    */
   loadMessages: (conversationId: string | null) => Promise<void>;
+  /** Refreshes messages without clearing the thread, preserving audit logs after stream ends. */
+  refreshMessages: (conversationId: string) => Promise<void>;
   /** Shows an empty thread, e.g. for a freshly created conversation; stops a running stream. */
   clearMessages: () => void;
   addMessage: (message: Message) => void;
@@ -31,6 +39,8 @@ export interface ChatState {
   appendReasoning: (text: string) => void;
   appendContent: (text: string) => void;
   setReasoningDuration: (seconds: number) => void;
+  setActivePersona: (personaId: string, customPrompt?: string) => void;
+  getActiveSystemPrompt: () => string | undefined;
   /** Marks the streamed message as failed and appends the error text. */
   failLastMessage: (errorMessage: string) => void;
   /** Swaps the temporary id of the streamed message for the id the backend persisted. */
@@ -46,7 +56,7 @@ const emptyThread = (): Pick<ChatState, "messages" | "activeTool" | "reasoningDu
 
 const streamStopped = { isStreaming: false, activeTool: null } as const;
 
-export const useChatStore = create<ChatState>((set) => {
+export const useChatStore = create<ChatState>((set, get) => {
   // The controller of the running generation; kept out of state because it is not renderable.
   let streamController: AbortController | null = null;
 
@@ -67,6 +77,20 @@ export const useChatStore = create<ChatState>((set) => {
     ...emptyThread(),
     isLoadingMessages: false,
     isStreaming: false,
+    activePersonaId: "default",
+    customPersonaPrompt: "",
+
+    setActivePersona: (personaId, customPrompt = "") =>
+      set({ activePersonaId: personaId, customPersonaPrompt: customPrompt }),
+
+    getActiveSystemPrompt: (): string | undefined => {
+      const state = get();
+      if (state.activePersonaId === "custom") {
+        return state.customPersonaPrompt || undefined;
+      }
+      const preset = PERSONA_PRESETS.find((p) => p.id === state.activePersonaId);
+      return preset?.systemPrompt;
+    },
 
     loadMessages: async (conversationId) => {
       abortStream();
@@ -80,6 +104,22 @@ export const useChatStore = create<ChatState>((set) => {
       } catch (error) {
         console.error("Failed to load messages for conversation:", error);
         set({ isLoadingMessages: false });
+      }
+    },
+
+    refreshMessages: async (conversationId) => {
+      if (!conversationId) return;
+      try {
+        const raw = await chatApi.listMessages(conversationId);
+        if (
+          raw &&
+          raw.length > 0 &&
+          useConversationStore.getState().activeConversationId === conversationId
+        ) {
+          set({ messages: raw.map(toMessage) });
+        }
+      } catch (error) {
+        console.error("Failed to refresh messages:", error);
       }
     },
 
@@ -108,13 +148,34 @@ export const useChatStore = create<ChatState>((set) => {
       set(streamStopped);
     },
 
-    setActiveTool: (tool) => set({ activeTool: tool }),
+    setActiveTool: (tool) => {
+      set({ activeTool: tool });
+      updateLastMessage((message) => {
+        const existing = message.toolCallsData ?? [];
+        const record: ToolCallRecord = {
+          tool,
+          input: "Executing...",
+          timestamp: new Date().toISOString(),
+        };
+        return {
+          ...message,
+          toolCallsData: [...existing, record],
+        };
+      });
+    },
 
     completeTool: (tool) => {
       set({ activeTool: null });
       updateLastMessage((message) => {
         const tools = message.toolsUsed ?? [];
-        return tools.includes(tool) ? message : { ...message, toolsUsed: [...tools, tool] };
+        const toolsUsed = tools.includes(tool) ? tools : [...tools, tool];
+        const existingData = message.toolCallsData ?? [];
+        const toolCallsData = existingData.map((tc) =>
+          tc.tool === tool && tc.input === "Executing..."
+            ? { ...tc, input: undefined, resultSummary: "Executed" }
+            : tc
+        );
+        return { ...message, toolsUsed, toolCallsData };
       });
     },
 

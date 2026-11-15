@@ -30,11 +30,14 @@ export function resetWorkspaceStores(): void {
     isStreaming: false,
     activeTool: null,
     reasoningDuration: null,
+    activePersonaId: "default",
+    customPersonaPrompt: "",
   });
   useModelStore.setState({
-    availableModels: ["gemma3:1b"],
-    selectedModel: "gemma3:1b",
-    modelCapabilities: { "gemma3:1b": false, "deepseek-r1:8b": false, "qwen2.5:7b": true },
+    models: [],
+    availableModels: [],
+    selectedModel: "",
+    modelCapabilities: {},
     toolsEnabled: false,
   });
 }

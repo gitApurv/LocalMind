@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { AlertCircle, Check, FileText, Loader2, UploadCloud } from "lucide-react";
+import { AlertCircle, Check, Download, FileText, Loader2, UploadCloud } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { getErrorMessage } from "@/lib/api-error";
 import { cn } from "@/lib/utils";
 import { useConversationStore } from "@/features/conversations/store/conversation-store";
@@ -114,19 +115,59 @@ export function AttachmentUploader({ conversationId }: AttachmentUploaderProps) 
 }
 
 function AttachmentRow({ attachment }: { attachment: Attachment }) {
+  const [isDownloading, setIsDownloading] = React.useState(false);
+
+  const handleDownload = async () => {
+    if (isDownloading) return;
+    setIsDownloading(true);
+    try {
+      await attachmentsApi.download(
+        attachment.conversationId,
+        attachment.id,
+        attachment.fileName || "document"
+      );
+    } catch (err) {
+      console.error("Failed to download attachment:", err);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   return (
-    <div className="flex items-center justify-between p-2 rounded-lg border border-border bg-card/70 text-xs shadow-sm">
+    <div className="flex items-center justify-between p-2.5 rounded-xl border border-border/80 bg-card/60 hover:bg-card/90 transition-all text-xs shadow-xs">
       <div className="flex items-center gap-2 truncate pr-2">
         <FileText className="w-4 h-4 text-primary shrink-0" />
         <div className="truncate">
           <p className="font-medium truncate text-foreground text-xs">
             {attachment.fileName || "Unnamed Document"}
           </p>
-          <p className="text-[10px] text-muted-foreground">{formatBytes(attachment.fileSize)}</p>
+          <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <span>{formatBytes(attachment.fileSize)}</span>
+            {attachment.chunkCount != null && attachment.chunkCount > 0 && (
+              <span className="font-mono text-primary/80">• {attachment.chunkCount} chunks</span>
+            )}
+          </div>
         </div>
       </div>
-      <div className="shrink-0 flex items-center gap-1.5">
+      <div className="shrink-0 flex items-center gap-1">
         <StatusChip status={attachment.status} />
+        {attachment.status === "READY" && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void handleDownload()}
+            disabled={isDownloading}
+            aria-label={`Download ${attachment.fileName}`}
+            title="Download original file"
+            className="w-7 h-7 rounded-lg text-muted-foreground hover:text-foreground"
+          >
+            {isDownloading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+          </Button>
+        )}
       </div>
     </div>
   );

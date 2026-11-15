@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 export interface ToolStatusBadgeProps {
   tool: string;
   status?: "executing" | "completed";
+  onClick?: () => void;
 }
 
 interface ToolDisplay {
@@ -34,7 +35,7 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
   getCurrentDateTime: { label: "Date & Time", icon: Clock },
 };
 
-export function ToolStatusBadge({ tool, status = "completed" }: ToolStatusBadgeProps) {
+export function ToolStatusBadge({ tool, status = "completed", onClick }: ToolStatusBadgeProps) {
   const { label, icon: ToolIcon } = TOOL_DISPLAY[tool] ?? { label: tool, icon: Wrench };
   const isExecuting = status === "executing";
 
@@ -42,8 +43,10 @@ export function ToolStatusBadge({ tool, status = "completed" }: ToolStatusBadgeP
     <div
       role="status"
       aria-live="polite"
+      onClick={onClick}
       className={cn(
         "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-all",
+        onClick && "cursor-pointer hover:border-primary/50 hover:bg-primary/10",
         isExecuting
           ? "border-amber-500/30 bg-amber-500/10 text-amber-300 animate-pulse shadow-sm"
           : "border-primary/20 bg-primary/5 text-primary/80"

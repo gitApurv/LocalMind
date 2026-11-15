@@ -1,4 +1,5 @@
 import { Brain, Calculator, FileText, Globe, type LucideIcon } from "lucide-react";
+import type { PersonaPreset } from "./types";
 
 export interface PromptSuggestion {
   title: string;
@@ -37,3 +38,30 @@ export const PROMPT_SUGGESTIONS: PromptSuggestion[] = [
 
 /** Upper bound for the auto-growing message box, in pixels. */
 export const COMPOSER_MAX_HEIGHT_PX = 180;
+
+export const PERSONA_PRESETS: PersonaPreset[] = [
+  {
+    id: "default",
+    name: "Default",
+    description: "Standard sovereign assistant",
+  },
+  {
+    id: "code_architect",
+    name: "Code Architect",
+    description: "Senior software engineer and systems architect",
+    systemPrompt:
+      "You are an elite principal software engineer and systems architect. Focus on clean code, idiomatic architecture, security, performance, and maintainability. Provide concrete code examples and architectural analysis.",
+  },
+  {
+    id: "researcher",
+    name: "Research Analyst",
+    description: "Meticulous deep research and synthesis specialist",
+    systemPrompt:
+      "You are a meticulous research analyst. Synthesize insights with precision, structure arguments logically, cite facts from documents and tool searches, and highlight edge cases and nuances.",
+  },
+  {
+    id: "custom",
+    name: "Custom Persona",
+    description: "Custom system instructions for this conversation",
+  },
+];

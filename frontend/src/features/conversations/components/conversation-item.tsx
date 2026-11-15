@@ -20,6 +20,7 @@ export function ConversationItem({ conversation }: ConversationItemProps) {
   const [isEditing, setIsEditing] = React.useState(false);
 
   const title = conversation.title || UNTITLED_CONVERSATION;
+  const shortModel = conversation.modelName ? conversation.modelName.split(":")[0] : null;
   const select = () => void selectConversation(conversation.id);
   const startRename = (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -43,10 +44,10 @@ export function ConversationItem({ conversation }: ConversationItemProps) {
       }}
       onDoubleClick={startRename}
       className={cn(
-        "group flex items-center justify-between px-3 py-2 rounded-lg text-xs cursor-pointer transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-primary",
+        "group flex items-center justify-between px-3 py-2 rounded-lg text-xs cursor-pointer transition-all focus:outline-none focus-visible:ring-1 focus-visible:ring-primary border border-transparent",
         isActive
-          ? "bg-primary/10 text-primary font-medium"
-          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          ? "bg-primary/10 text-primary font-medium border-primary/20 shadow-sm"
+          : "text-muted-foreground hover:bg-muted/80 hover:text-foreground hover:border-border/40"
       )}
     >
       <div className="flex items-center gap-2 truncate pr-1">
@@ -56,6 +57,11 @@ export function ConversationItem({ conversation }: ConversationItemProps) {
           <MessageSquare className="w-3.5 h-3.5 shrink-0" />
         )}
         <span className="truncate">{title}</span>
+        {shortModel && (
+          <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted/70 text-muted-foreground font-mono shrink-0">
+            {shortModel}
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">

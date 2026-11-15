@@ -1,5 +1,12 @@
 export type MessageRole = "USER" | "ASSISTANT" | "SYSTEM";
 
+export interface ToolCallRecord {
+  tool: string;
+  input?: string;
+  timestamp?: string;
+  resultSummary?: string;
+}
+
 /** A chat message as the UI shows it, built from `MessageResponse` or while streaming. */
 export interface Message {
   id: string;
@@ -9,6 +16,10 @@ export interface Message {
   reasoningContent?: string | null;
   /** Tools the assistant called while producing this message (filled while streaming). */
   toolsUsed?: string[];
+  /** Detailed tool calls data from backend audit log. */
+  toolCallsData?: ToolCallRecord[];
+  /** Token count for this turn if available from backend. */
+  tokenCount?: number | null;
   /** True when streaming failed; the error text is appended to `content`. */
   error?: boolean;
   createdAt?: string;
@@ -41,4 +52,12 @@ export interface ChatRequest {
   message: string;
   model: string;
   toolsEnabled: boolean;
+  systemPrompt?: string;
+}
+
+export interface PersonaPreset {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt?: string;
 }

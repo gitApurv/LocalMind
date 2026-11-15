@@ -1,8 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { AttachmentsPanel } from "@/features/attachments/components/attachments-panel";
 import { useConversationStore } from "@/features/conversations/store/conversation-store";
+import {
+  ContextInspector,
+  type InspectorTab,
+} from "@/features/workspace/components/context-inspector";
 import { useChatStream } from "../hooks/use-chat-stream";
 import { useChatStore } from "../store/chat-store";
 import { ChatComposer } from "./chat-composer";
@@ -14,7 +17,7 @@ export interface ChatContainerProps {
   onToggleSidebar?: () => void;
 }
 
-/** Main chat area: header, optional attachments drawer, thread and composer. */
+/** Main chat area: header, thread, composer, and contextual slide-over inspector. */
 export function ChatContainer({ onToggleSidebar }: ChatContainerProps) {
   const activeConversationId = useConversationStore((s) => s.activeConversationId);
   const hasMessages = useChatStore((s) => s.messages.length > 0);
@@ -23,7 +26,8 @@ export function ChatContainer({ onToggleSidebar }: ChatContainerProps) {
   const { sendMessage, stopStreaming, error } = useChatStream();
 
   const [draft, setDraft] = React.useState("");
-  const [isAttachmentsOpen, setIsAttachmentsOpen] = React.useState(false);
+  const [isInspectorOpen, setIsInspectorOpen] = React.useState(false);
+  const [inspectorTab, setInspectorTab] = React.useState<InspectorTab>("docs");
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null);
 
   const handleSend = async () => {
@@ -38,39 +42,54 @@ export function ChatContainer({ onToggleSidebar }: ChatContainerProps) {
     inputRef.current?.focus();
   };
 
+  const handleOpenTab = (tab: InspectorTab) => {
+    if (isInspectorOpen && inspectorTab === tab) {
+      setIsInspectorOpen(false);
+    } else {
+      setInspectorTab(tab);
+      setIsInspectorOpen(true);
+    }
+  };
+
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-background">
-      <ChatHeader
-        isAttachmentsOpen={isAttachmentsOpen}
-        onToggleAttachments={() => setIsAttachmentsOpen((open) => !open)}
-        onToggleSidebar={onToggleSidebar}
-      />
-
-      {isAttachmentsOpen && (
-        <AttachmentsPanel
-          conversationId={activeConversationId}
-          onClose={() => setIsAttachmentsOpen(false)}
+    <div className="flex-1 flex h-full overflow-hidden bg-background relative">
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
+        <ChatHeader
+          isInspectorOpen={isInspectorOpen}
+          activeInspectorTab={inspectorTab}
+          onOpenTab={handleOpenTab}
+          onToggleInspector={() => setIsInspectorOpen((open) => !open)}
+          onToggleSidebar={onToggleSidebar}
         />
-      )}
 
-      <div className="flex-1 overflow-y-auto">
-        {isLoadingMessages ? (
-          <ThreadLoading />
-        ) : hasMessages ? (
-          <MessageList />
-        ) : (
-          <ChatWelcome onPickPrompt={handlePickPrompt} />
-        )}
+        <div className="flex-1 overflow-y-auto">
+          {isLoadingMessages ? (
+            <ThreadLoading />
+          ) : hasMessages ? (
+            <MessageList />
+          ) : (
+            <ChatWelcome onPickPrompt={handlePickPrompt} />
+          )}
+        </div>
+
+        <ChatComposer
+          value={draft}
+          onChange={setDraft}
+          onSend={() => void handleSend()}
+          onStop={stopStreaming}
+          isStreaming={isStreaming}
+          error={error}
+          inputRef={inputRef}
+          onToggleAttachments={() => handleOpenTab("docs")}
+        />
       </div>
 
-      <ChatComposer
-        value={draft}
-        onChange={setDraft}
-        onSend={() => void handleSend()}
-        onStop={stopStreaming}
-        isStreaming={isStreaming}
-        error={error}
-        inputRef={inputRef}
+      <ContextInspector
+        isOpen={isInspectorOpen}
+        activeTab={inspectorTab}
+        onTabChange={setInspectorTab}
+        onClose={() => setIsInspectorOpen(false)}
+        conversationId={activeConversationId}
       />
     </div>
   );

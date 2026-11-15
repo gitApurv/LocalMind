@@ -59,4 +59,23 @@ describe("ChatContainer", () => {
 
     expect(screen.getByRole("button", { name: /stop generation/i })).toBeDefined();
   });
+
+  it("toggles left sidebar when sidebar toggle button is clicked", () => {
+    const toggleSpy = vi.fn();
+    render(<ChatContainer onToggleSidebar={toggleSpy} />);
+
+    const toggleBtn = screen.getByRole("button", { name: /toggle navigation sidebar/i });
+    fireEvent.click(toggleBtn);
+
+    expect(toggleSpy).toHaveBeenCalled();
+  });
+
+  it("toggles right contextual inspector when inspector button is clicked", () => {
+    render(<ChatContainer />);
+
+    const inspectorToggle = screen.getByRole("button", { name: /toggle inspector drawer/i });
+    fireEvent.click(inspectorToggle);
+
+    expect(screen.getByLabelText("Contextual Inspector")).toBeDefined();
+  });
 });

@@ -1,34 +1,46 @@
-import { Bot, Menu, Paperclip, Sparkles } from "lucide-react";
+"use client";
+
+import { Bot, Menu, PanelRight, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useConversationStore } from "@/features/conversations/store/conversation-store";
 import { ModelSelector } from "@/features/models/components/model-selector";
 import { useChatStore } from "../store/chat-store";
 
+export type InspectorTabType = "docs" | "memory" | "tools";
+
 export interface ChatHeaderProps {
-  isAttachmentsOpen: boolean;
-  onToggleAttachments: () => void;
+  isInspectorOpen?: boolean;
+  activeInspectorTab?: InspectorTabType;
+  onOpenTab?: (tab: InspectorTabType) => void;
+  onToggleInspector?: () => void;
   onToggleSidebar?: () => void;
+  // Backwards-compatible aliases
+  isAttachmentsOpen?: boolean;
+  onToggleAttachments?: () => void;
 }
 
 export function ChatHeader({
-  isAttachmentsOpen,
-  onToggleAttachments,
+  isInspectorOpen,
+  onToggleInspector,
   onToggleSidebar,
+  isAttachmentsOpen,
 }: ChatHeaderProps) {
   const title = useConversationStore(
     (s) => s.conversations.find((c) => c.id === s.activeConversationId)?.title
   );
   const isStreaming = useChatStore((s) => s.isStreaming);
 
+  const effectiveIsOpen = isInspectorOpen ?? isAttachmentsOpen ?? false;
+
   return (
-    <header className="h-14 border-b border-border bg-card/40 px-4 flex items-center justify-between shrink-0">
+    <header className="h-14 border-b border-border/80 bg-card/60 backdrop-blur-md px-4 flex items-center justify-between shrink-0 z-10">
       <div className="flex items-center gap-2.5 truncate">
         {onToggleSidebar && (
           <button
             type="button"
             onClick={onToggleSidebar}
             aria-label="Toggle navigation sidebar"
-            className="md:hidden p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
+            className="md:hidden p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
           >
             <Menu className="w-4 h-4" />
           </button>
@@ -46,22 +58,25 @@ export function ChatHeader({
       </div>
 
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onToggleAttachments}
-          aria-label="Toggle attachments drawer"
-          title="Manage conversation attachments"
-          className={cn(
-            "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors shadow-sm",
-            isAttachmentsOpen
-              ? "border-primary/40 bg-primary/10 text-primary"
-              : "border-border bg-card/60 text-muted-foreground hover:bg-muted hover:text-foreground"
-          )}
-        >
-          <Paperclip className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Context Docs</span>
-        </button>
         <ModelSelector />
+
+        {/* Inspector Toggle Button */}
+        {onToggleInspector && (
+          <button
+            type="button"
+            onClick={onToggleInspector}
+            aria-label="Toggle inspector drawer"
+            title={effectiveIsOpen ? "Close inspector" : "Open inspector"}
+            className={cn(
+              "p-2 rounded-lg border transition-colors shadow-xs cursor-pointer",
+              effectiveIsOpen
+                ? "border-primary/50 bg-primary/15 text-primary"
+                : "border-border/80 bg-card/60 text-muted-foreground hover:bg-card/90 hover:text-foreground"
+            )}
+          >
+            <PanelRight className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </header>
   );

@@ -57,8 +57,9 @@ export function useChatStream() {
 
     try {
       const { selectedModel, toolsEnabled } = useModelStore.getState();
+      const systemPrompt = useChatStore.getState().getActiveSystemPrompt();
       const response = await chatApi.stream(
-        { conversationId, message: text, model: selectedModel, toolsEnabled },
+        { conversationId, message: text, model: selectedModel, toolsEnabled, systemPrompt },
         signal
       );
       if (!response.body) {
@@ -78,6 +79,9 @@ export function useChatStream() {
     } finally {
       useChatStore.getState().finishStream(signal);
       scheduleTitleRefresh(conversationId);
+      if (!signal.aborted) {
+        void useChatStore.getState().refreshMessages(conversationId);
+      }
     }
   }, []);
 

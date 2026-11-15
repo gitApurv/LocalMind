@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api-client";
 import { aMessage, resetWorkspaceStores } from "@/test/factories";
+import { useConversationStore } from "@/features/conversations/store/conversation-store";
 import { useChatStore } from "../chat-store";
 
 const assistantPlaceholder = aMessage({ id: "a-tmp", role: "ASSISTANT", content: "" });
@@ -71,6 +72,8 @@ describe("useChatStore", () => {
       reasoningContent: "Let me think.",
       toolsUsed: ["searchWeb"],
     });
+    expect(assistant.toolCallsData).toHaveLength(1);
+    expect(assistant.toolCallsData?.[0].tool).toBe("searchWeb");
     expect(useChatStore.getState().activeTool).toBeNull();
   });
 
@@ -128,5 +131,26 @@ describe("useChatStore", () => {
 
     expect(useChatStore.getState().isStreaming).toBe(true);
     expect(newSignal.aborted).toBe(false);
+  });
+
+  it("refreshMessages() updates messages without resetting thread when active", async () => {
+    useConversationStore.setState({ activeConversationId: "c-1" });
+    useChatStore.setState({ messages: [aMessage({ id: "m-old" })] });
+    const fresh = [
+      {
+        id: "m-fresh",
+        conversationId: "c-1",
+        role: "ASSISTANT" as const,
+        content: "Result",
+        toolCalls: '[{"tool":"searchWeb"}]',
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+    ];
+    vi.spyOn(apiClient, "get").mockResolvedValueOnce(fresh);
+
+    await useChatStore.getState().refreshMessages("c-1");
+
+    expect(useChatStore.getState().messages[0].id).toBe("m-fresh");
+    expect(useChatStore.getState().messages[0].toolCallsData?.[0].tool).toBe("searchWeb");
   });
 });

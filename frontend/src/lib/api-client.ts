@@ -63,6 +63,11 @@ class ApiClient {
     return this.request<T>(endpoint, { ...options, method: "DELETE" });
   }
 
+  public async blob(endpoint: string, options?: RequestOptions): Promise<Blob> {
+    const response = await this.send(endpoint, { ...options, method: "GET" });
+    return response.blob();
+  }
+
   /** POSTs JSON and returns the raw response so the caller can read a server-sent event stream. */
   public stream(endpoint: string, body: unknown, signal?: AbortSignal): Promise<Response> {
     return this.send(endpoint, {
