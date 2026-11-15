@@ -25,7 +25,7 @@ export function Workspace() {
     <div className="flex h-screen w-screen overflow-hidden bg-background relative">
       {isSidebarOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/60 md:hidden backdrop-blur-xs"
+          className="fixed inset-0 z-40 bg-black/60 md:hidden backdrop-blur-sm"
           onClick={() => setIsSidebarOpen(false)}
         />
       )}

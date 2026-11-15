@@ -8,7 +8,7 @@ import { useConversationStore } from "@/features/conversations/store/conversatio
 import { UserMenu } from "./user-menu";
 
 export interface WorkspaceSidebarProps {
-  /** On small screens the sidebar is an overlay that is shown only when open. */
+  /** When open, displays on desktop as a column and on small screens as an overlay. */
   isOpen: boolean;
   onClose: () => void;
   onOpenSettings: () => void;
@@ -34,15 +34,22 @@ export function WorkspaceSidebar({
 
   return (
     <aside
+      aria-label="Workspace Sidebar"
       className={cn(
         isOpen ? "fixed inset-y-0 left-0 z-50 flex shadow-2xl" : "hidden",
-        "md:relative md:flex w-72 border-r border-border bg-card/95 backdrop-blur flex-col shrink-0 transition-transform"
+        "md:relative md:flex w-72 border-r border-border bg-card/95 backdrop-blur",
+        "flex-col shrink-0 transition-transform"
       )}
     >
       <div className="p-4 border-b border-border space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center font-bold">
+            <div
+              className={cn(
+                "w-8 h-8 rounded-lg bg-primary text-primary-foreground",
+                "flex items-center justify-center font-bold"
+              )}
+            >
               <Bot className="w-5 h-5" />
             </div>
             <div>
@@ -51,15 +58,25 @@ export function WorkspaceSidebar({
             </div>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="flex items-center text-xs text-emerald-400 gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-              <ShieldCheck className="w-3 h-3" />
-              <span className="hidden sm:inline">Air-Gapped</span>
+            <div
+              className={cn(
+                "flex items-center text-xs text-emerald-400 gap-1.5",
+                "bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20",
+                "shadow-[0_0_12px_rgba(16,185,129,0.15)]"
+              )}
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+              <ShieldCheck className="w-3 h-3 text-emerald-400" />
+              <span className="text-[10px] font-medium tracking-tight">Air-Gapped Node</span>
             </div>
             <button
               type="button"
               onClick={onClose}
               aria-label="Close sidebar"
-              className="md:hidden p-1 text-muted-foreground hover:text-foreground"
+              className="md:hidden p-1 text-muted-foreground hover:text-foreground cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
