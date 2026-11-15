@@ -397,8 +397,8 @@ sequenceDiagram
     User->>Backend: GET /api/models
     Backend->>Ollama: GET /api/tags
     Ollama-->>Backend: Models with capabilities ["completion", "tools", ...]
-    Note over Backend: ModelCatalogService: capabilities win,<br/>ModelProfileRegistry is the fallback
-    Backend-->>User: ModelInfo list with supportsTools
+    Note over Backend: ModelCatalogService: capabilities cached<br/>on startup from Ollama
+    Backend-->>User: ModelInfo list with supportsTools and defaultModel
 
     Note over User, Backend: Tier 2: Client gating
     alt Selected model lacks tool support
@@ -414,9 +414,9 @@ sequenceDiagram
     Backend-->>User: SSE CONTENT ... DONE
 ```
 
-1. **Tier 1 — Capability discovery (`llm.service.ModelCatalogService`):** `GET /api/models` reads Ollama's `/api/tags`. If a model reports `capabilities`, `supportsTools` is `"tools" ∈ capabilities`. Otherwise the static `ModelProfileRegistry` decides: known profiles (`gemma3:1b`, `qwen2.5:7b`, `deepseek-r1:1.5b`, `deepseek-r1:8b`) or, for unknown names, whether the name contains `tools`, `qwen`, `llama` or `mistral`. The same service answers `supportsTools(model)` for the chat pipeline, with the tag list cached for one minute, so the UI and the backend always agree.
-2. **Tier 2 — Client gating (`features/models`):** `useModelStore` keeps a `modelCapabilities` map from the model list and turns `toolsEnabled` off whenever the selected model does not support tools. `ModelSelector`'s Tools switch is then disabled and labelled *"\<model\> does not support tools"*.
-3. **Tier 3 — Server-side bypass & error translation (`ToolSelector`, `ChatOrchestratorService`):** `ToolSelector` registers no tools when `supportsTools(model)` is false, even if the client sent `toolsEnabled: true`, so no schema reaches Ollama. If a rejection still happens (e.g. capabilities changed after caching), the stream error is inspected (including causes and suppressed exceptions) and the client gets the `ERROR` event *"Model '\<model\>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model (e.g., qwen2.5:7b)."*
+1. **Tier 1 — Dynamic capability discovery (`llm.service.ModelCatalogService`):** `GET /api/models` returns installed models cached directly from Ollama's `/api/tags` on application startup. Capability flags (`supportsTools = "tools" ∈ capabilities`) and context budgets are derived dynamically from Ollama model metadata and registered in `ModelProfileRegistry`, eliminating static registries and hardcoded heuristics. On startup, LocalMind validates that the required chat model (`gemma3:1b`) and embedding model (`nomic-embed-text`) exist in Ollama. The catalog is cached for the application lifecycle, serving both `/api/models` and `supportsTools(model)` so the UI and backend remain in lockstep.
+2. **Tier 2 — Client gating (`features/models`):** `useModelStore` keeps a `modelCapabilities` map from the backend model list and turns `toolsEnabled` off whenever the selected model does not support tools. `ModelSelector`'s Tools switch is then disabled and labelled *"\<model\> does not support tools"*.
+3. **Tier 3 — Server-side bypass & error translation (`ToolSelector`, `ChatOrchestratorService`):** `ToolSelector` registers no tools when `supportsTools(model)` is false, even if the client sent `toolsEnabled: true`, so no schema reaches Ollama. If a rejection still happens, the stream error is inspected and the client gets the `ERROR` event *"Model '\<model\>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model."*
 
 ---
 
@@ -492,5 +492,5 @@ On failure the attachment is marked `FAILED` with a fixed explanatory message; d
 2. **Logging:** standard Spring Boot console logging (SLF4J via Lombok `@Slf4j`). `PromptStatsAdvisor` logs the token distribution of every assembled prompt; ETL, tool calls, auto-titling and summaries log their outcome. There is no structured JSON logging or MDC correlation yet.
 3. **Graceful degradation:**
    - SearXNG unreachable: `searchWeb` returns no results and the model is told so; the chat continues.
-   - Ollama unreachable or failing: the model list falls back to the configured default model, and a chat stream ends with a generic `ERROR` event after persisting any partial answer.
+   - Ollama unreachable or missing required models: with `VALIDATE_MODELS_ON_STARTUP=true` (the default), server startup fails fast with an explanatory `IllegalStateException`; when startup validation is disabled, it logs a warning and falls back to configured model properties, and chat streams end with an `ERROR` event if Ollama fails.
    - Qdrant unreachable at startup: payload-index creation is skipped with a log message; RAG and memory retrieval advisors return the prompt unchanged on errors.

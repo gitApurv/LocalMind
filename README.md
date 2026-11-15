@@ -92,9 +92,9 @@ flowchart TD
   - **Web page reader:** readable text via Jsoup; only offered when the message contains a URL. Every redirect hop is checked against loopback, private, link-local and other internal address ranges (SSRF protection).
   - **User memory:** save and recall facts about the user across conversations.
   - **Document search (RAG):** semantic search over the conversation's uploaded documents.
-  - **Guardrail:** tools are only offered to models that support them (capabilities reported by Ollama, with a fallback list); the UI disables the Tools switch for other models, and at most 5 tool calls run per turn.
+  - **Guardrail:** tools are only offered to models that support them (capabilities reported dynamically by Ollama); the UI disables the Tools switch for other models, and at most 5 tool calls run per turn.
 - **Documents:** drag-and-drop upload of `pdf`, `docx`, `txt` and `md` files (up to 25 MB), with automatic conversation creation and ingestion status chips (`PROCESSING`, `READY`, `FAILED`). Deleting a conversation also deletes its files and vectors.
-- **Long-term memories API:** list, pin and delete the memories the assistant saved (`/api/memories`; no UI yet).
+- **Sovereign Memory Vault & Context Inspector:** inspect, search, pin and delete saved long-term memories and view tool execution logs in the collapsible right inspector panel (`/api/memories`).
 - **Authentication & tenant isolation:**
   - 15-minute access tokens (RS256), held only in browser memory.
   - 7-day HttpOnly, `SameSite=Strict` refresh tokens, stored as SHA-256 hashes and rotated on every use; replaying an old token revokes all of the user's sessions (parallel refreshes from several tabs within 10 seconds are allowed).
@@ -160,7 +160,7 @@ ollama pull gemma3:1b
 ollama pull nomic-embed-text
 ```
 
-Pull a tool-capable model such as `qwen2.5:7b` as well if you want the assistant to use tools.
+LocalMind validates on server startup that the required chat model (`gemma3:1b`) and embedding model (`nomic-embed-text`) are installed in Ollama (`VALIDATE_MODELS_ON_STARTUP=true`), preventing startup if they are missing. Pull a tool-capable model such as `qwen2.5:7b` as well if you want the assistant to use tools.
 
 ### 3. Run the Backend (Spring Boot)
 
@@ -199,6 +199,7 @@ Every setting uses a `${VARIABLE:default}` placeholder in `backend/src/main/reso
 | `OLLAMA_BASE_URL`              | `http://127.0.0.1:11434`                      | backend          | Ollama API endpoint                                                                     |
 | `OLLAMA_CHAT_MODEL`            | `gemma3:1b`                                   | backend          | Default chat model                                                                      |
 | `OLLAMA_EMBEDDING_MODEL`       | `nomic-embed-text`                            | backend          | Embedding model                                                                         |
+| `VALIDATE_MODELS_ON_STARTUP`   | `true`                                        | backend          | Verify required chat and embedding models in Ollama on startup                          |
 | `QDRANT_HOST`                  | `127.0.0.1`                                   | backend          | Qdrant host                                                                             |
 | `QDRANT_GRPC_PORT`             | `6334`                                        | backend, compose | Qdrant gRPC port                                                                        |
 | `QDRANT_HTTP_PORT`             | `6333`                                        | compose          | Qdrant HTTP port                                                                        |
@@ -259,7 +260,7 @@ All endpoints except registration, login, refresh, logout and `/actuator/health`
 
 ### Models (`/api/models`)
 
-- `GET /api/models` — Installed Ollama models, each with `supportsTools`.
+- `GET /api/models` — Installed Ollama models, each with `supportsTools`, along with the configured `defaultModel`.
 
 ### Real-time Streaming (`/api/chat/stream`)
 

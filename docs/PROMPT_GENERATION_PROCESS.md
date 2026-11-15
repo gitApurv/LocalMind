@@ -104,11 +104,11 @@ Before the reactive stream starts (so failures are ordinary HTTP errors):
   ```
 
   `estimateTokens` is `Math.max(1, tokenCounter.estimate(text))`. The saved message's ID is passed to the advisors so history can exclude it.
-- **Profile lookup:** `modelProfileRegistry.getProfile(model)` returns the `ModelProfile`:
-  - `numCtx`: total Ollama context tokens (e.g. `8192`, `16384`).
-  - `outputReserve`: tokens reserved for the answer (`numPredict`).
-  - `ragBudget`, `historyBudget`: budgets for excerpts and history.
-  - `toolSupported`: fallback for tool support when Ollama does not report capabilities (see Step 2).
+- **Profile lookup:** `modelProfileRegistry.getProfile(model)` returns the dynamically registered `ModelProfile`:
+  - `numCtx`: total context tokens derived from Ollama `details.context_length` (clamped between 4096 and 32768, default `8192`).
+  - `outputReserve`: tokens reserved for the answer (`numPredict`, up to `min(2048, ctx / 4)`).
+  - `ragBudget`, `historyBudget`: budgets calculated proportionally for excerpts and history.
+  - `toolSupported`: tool calling support determined from Ollama capabilities (`"tools" ∈ capabilities`).
 - **ChatClient options and advisors** (inside `ChatTurn.buildPrompt`):
 
   ```java
@@ -135,7 +135,7 @@ Before the reactive stream starts (so failures are ordinary HTTP errors):
 
 Implemented in `com.localmind.chat.prompt.ToolSelector`:
 
-1. **Capability check:** returns no tools when `toolsEnabled` is `false` (it defaults to `true`) or when `ModelCatalogService.supportsTools(model)` is `false`. That check prefers the `capabilities` Ollama reports in `/api/tags` (cached for one minute) and falls back to `ModelProfile.toolSupported` (Section 5). Without tools, no schema is sent, so models such as `gemma3:1b` do not fail with HTTP 400.
+1. **Capability check:** returns no tools when `toolsEnabled` is `false` (it defaults to `true`) or when `ModelCatalogService.supportsTools(model)` is `false`. That check verifies Ollama capabilities dynamically discovered and cached at startup (`"tools" ∈ capabilities`). Without tools, no schema is sent, so models such as `gemma3:1b` do not fail with HTTP 400.
 2. **Tools offered:**
    - `getCurrentDateTime` (`DateTimeTools`): always.
    - `calculateExpression` (`MathTools`): always.
@@ -316,7 +316,7 @@ The advisor never changes the request.
    - Bumps `conversations.updated_at` with `ConversationRepository.touch(...)`, a targeted update that never overwrites a concurrent rename or pin.
    - Emits `DONE` with the saved message ID.
    - Calls `AutoTitleService.generateTitleAsync(...)`. It runs after every completed turn but only acts while the title is still the placeholder `New Chat`: the model proposes a 3–5 word title (think blocks, quotes and `Title:` prefixes stripped, max 50 characters) and `replacePlaceholderTitle` stores it only if the user has not renamed the conversation meanwhile.
-4. **On model error:** the partial answer is saved and an `ERROR` event is sent. If Ollama says the model does not support tools, the message is *"Model '\<model\>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model (e.g., qwen2.5:7b)."*; otherwise a generic message asks the user to check Ollama. Details are only logged.
+4. **On model error:** the partial answer is saved and an `ERROR` event is sent. If Ollama says the model does not support tools, the message is *"Model '\<model\>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model."*; otherwise a generic message asks the user to check Ollama. Details are only logged.
 5. **On client disconnect:** the upstream Ollama subscription is disposed and the partial answer is saved.
 
 ---
@@ -365,26 +365,17 @@ What does the PromptStructureAdvisor do in LocalMind?
 
 ---
 
-## 5. Model Profiles Registry (`ModelProfileRegistry`)
+## 5. Dynamic Model Profiles Registry (`ModelProfileRegistry`)
 
-Defined in `com.localmind.llm.service.ModelProfileRegistry`. A model matches a profile when its lower-cased name contains the profile name (e.g. `qwen2.5:7b-instruct` uses `qwen2.5:7b`); a blank name uses the default.
+Defined in `com.localmind.llm.service.ModelProfileRegistry`. Profiles are dynamically constructed from Ollama model metadata on server startup without static catalogs or hardcoded lists (`ModelProfile.fromOllama`):
 
-| Model Identifier        | `numCtx` | `outputReserve` | `ragBudget` | `historyBudget` | `toolSupported` (fallback) |
-| :---------------------- | :------: | :-------------: | :---------: | :-------------: | :------------------------: |
-| `gemma3:1b` *(Default)* |  8,192   |      1,600      |    2,000    |      3,400      |          `false`           |
-| `qwen2.5:7b`            |  16,384  |      2,048      |    4,000    |      8,000      |           `true`           |
-| `deepseek-r1:1.5b`      |  8,192   |      2,048      |    2,000    |      3,000      |          `false`           |
-| `deepseek-r1:8b`        |  16,384  |      4,096      |    4,000    |      6,000      |          `false`           |
+- **Context Window (`numCtx`):** derived from Ollama `details.context_length` (clamped to the `[4096, 32768]` range, default `8192` when unspecified).
+- **Output Reserve (`outputReserve`):** tokens kept free for the answer (`numPredict`), calculated as `min(2048, ctx / 4)`.
+- **RAG Excerpt Budget (`ragBudget`):** calculated proportionally from remaining tokens as `max(1000, remaining * 0.35)`.
+- **History Budget (`historyBudget`):** calculated proportionally from remaining tokens as `max(1000, remaining * 0.55)`.
+- **Tool Calling (`toolSupported`):** resolved strictly from Ollama model capabilities (`"tools" ∈ capabilities`).
 
-### Fallback for Other Models
-
-- `numCtx`: `8192`
-- `outputReserve`: `1600`
-- `ragBudget`: `2000`
-- `historyBudget`: `3400`
-- `toolSupported`: the lower-cased name contains `tools`, `qwen`, `llama` or `mistral`
-
-`toolSupported` is only consulted when Ollama does not report the model's capabilities.
+For arbitrary unknown models without dedicated Ollama metrics, a safe generic budget is assigned: `numCtx = 8192`, `outputReserve = 1600`, `ragBudget = 2000`, `historyBudget = 3400`, `toolSupported = false`.
 
 ---
 
@@ -392,12 +383,14 @@ Defined in `com.localmind.llm.service.ModelProfileRegistry`. A model matches a p
 
 All values are bound from `application.yml`; each can be overridden with the environment variable shown.
 
-| Property Key                          | Environment Variable        |      Default Value       | Description                                                                |
-| :------------------------------------ | :-------------------------- | :----------------------: | :------------------------------------------------------------------------- |
-| `localmind.prompt.stats.enabled`      | `PROMPT_STATS_ENABLED`      |          `true`          | Token accounting log (`PromptStatsAdvisor`)                                |
-| `localmind.prompt.history.token-trim` | `PROMPT_HISTORY_TOKEN_TRIM` |          `true`          | History and summary injection (`HistoryAdvisor`); `false` sends no history |
-| `localmind.prompt.memory.semantic`    | `PROMPT_MEMORY_SEMANTIC`    |          `true`          | Semantic memory retrieval (`MemoryRetrievalAdvisor`)                       |
-| `localmind.prompt.rag.auto`           | `PROMPT_RAG_AUTO`           |          `true`          | Automatic document excerpts (`AutoRagAdvisor`)                             |
-| `localmind.llm.default-model`         | `OLLAMA_CHAT_MODEL`         |       `gemma3:1b`        | Model used when neither the request nor the conversation sets one          |
-| `spring.ai.ollama.base-url`           | `OLLAMA_BASE_URL`           | `http://127.0.0.1:11434` | Ollama endpoint (same variable feeds `localmind.llm.ollama-base-url`)      |
-| `localmind.tools.searxng.base-url`    | `SEARXNG_BASE_URL`          | `http://127.0.0.1:8081`  | SearXNG instance for `searchWeb`                                           |
+| Property Key                               | Environment Variable          |      Default Value       | Description                                                                |
+| :----------------------------------------- | :---------------------------- | :----------------------: | :------------------------------------------------------------------------- |
+| `localmind.prompt.stats.enabled`           | `PROMPT_STATS_ENABLED`        |          `true`          | Token accounting log (`PromptStatsAdvisor`)                                |
+| `localmind.prompt.history.token-trim`      | `PROMPT_HISTORY_TOKEN_TRIM`   |          `true`          | History and summary injection (`HistoryAdvisor`); `false` sends no history |
+| `localmind.prompt.memory.semantic`         | `PROMPT_MEMORY_SEMANTIC`      |          `true`          | Semantic memory retrieval (`MemoryRetrievalAdvisor`)                       |
+| `localmind.prompt.rag.auto`                | `PROMPT_RAG_AUTO`             |          `true`          | Automatic document excerpts (`AutoRagAdvisor`)                             |
+| `localmind.llm.default-model`              | `OLLAMA_CHAT_MODEL`           |       `gemma3:1b`        | Model used when neither the request nor the conversation sets one          |
+| `localmind.llm.default-embedding-model`    | `OLLAMA_EMBEDDING_MODEL`      |    `nomic-embed-text`    | Embedding model for document vectors and user memories                     |
+| `localmind.llm.validate-models-on-startup` | `VALIDATE_MODELS_ON_STARTUP`  |          `true`          | Verify required chat and embedding models in Ollama on server startup      |
+| `spring.ai.ollama.base-url`                | `OLLAMA_BASE_URL`             | `http://127.0.0.1:11434` | Ollama endpoint (same variable feeds `localmind.llm.ollama-base-url`)      |
+| `localmind.tools.searxng.base-url`         | `SEARXNG_BASE_URL`            | `http://127.0.0.1:8081`  | SearXNG instance for `searchWeb`                                           |

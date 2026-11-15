@@ -163,7 +163,7 @@ Code is grouped first by feature, mirroring the backend's package-by-feature, th
 | `store/` | Zustand stores (`<name>-store.ts`) |
 | `lib/` | Pure logic without React, stores or `apiClient`: parsers, validation, formatting |
 | `types.ts` | Types mirroring the backend DTOs and requests of this feature |
-| `constants.ts` | Literals used in more than one file (default titles, model presets, suggestions) |
+| `constants.ts` | Literals used in more than one file (default titles, suggestions) |
 
 ```text
 frontend/src
@@ -176,7 +176,7 @@ frontend/src
 ├── features/
 │   ├── auth/               # login, register, session refresh, profile
 │   │   ├── api/  components/  hooks/  lib/  store/  types.ts
-│   ├── workspace/          # authenticated app shell: auth gate, sidebar, user menu
+│   ├── workspace/          # authenticated app shell: auth gate, sidebar, context inspector, user menu
 │   │   ├── components/  hooks/
 │   ├── conversations/      # thread list, create/rename/pin/delete, active thread
 │   │   ├── api/  components/  store/  constants.ts  types.ts
@@ -184,8 +184,10 @@ frontend/src
 │   │   ├── api/  components/  hooks/  lib/  store/  constants.ts  types.ts
 │   ├── attachments/        # document upload and ingestion status polling
 │   │   ├── api/  components/  hooks/  lib/  types.ts
-│   ├── models/             # model catalogue, model selection, tools toggle
-│   │   ├── api/  components/  lib/  store/  constants.ts  types.ts
+│   ├── memories/           # sovereign memory vault: list, pin, delete long-term memories
+│   │   ├── api/  components/  store/  types.ts
+│   ├── models/             # dynamic model catalogue, model selection, tools toggle
+│   │   ├── api/  components/  lib/  store/  types.ts
 │   └── settings/           # profile and custom-instructions dialog
 │       └── components/
 └── test/                   # shared test factories (aConversation, resetWorkspaceStores)
