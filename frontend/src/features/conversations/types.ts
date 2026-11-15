@@ -17,4 +17,5 @@ export interface CreateConversationRequest {
 export interface UpdateConversationRequest {
   title?: string;
   pinned?: boolean;
+  modelName?: string;
 }

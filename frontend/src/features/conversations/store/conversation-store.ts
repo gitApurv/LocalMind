@@ -16,6 +16,7 @@ export interface ConversationState {
   createConversation: (title?: string, modelName?: string) => Promise<Conversation>;
   renameConversation: (id: string, title: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
+  updateConversationModel: (id: string, modelName: string) => Promise<void>;
   /** Deletes a conversation and, if it was active, activates the next one. */
   deleteConversation: (id: string) => Promise<void>;
   /** Clears all conversation and chat state, e.g. on sign-out. */
@@ -80,6 +81,14 @@ export const useConversationStore = create<ConversationState>((set, get) => {
         await update(id, { pinned: !conversation.pinned });
       } catch (error) {
         console.error("Failed to toggle conversation pin status:", error);
+      }
+    },
+
+    updateConversationModel: async (id, modelName) => {
+      try {
+        await update(id, { modelName });
+      } catch (error) {
+        console.error("Failed to update conversation model:", error);
       }
     },
 

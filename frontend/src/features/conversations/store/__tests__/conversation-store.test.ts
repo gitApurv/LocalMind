@@ -131,6 +131,22 @@ describe("useConversationStore", () => {
     expect(useConversationStore.getState().conversations[0].title).toBe("Renamed");
   });
 
+  it("updateConversationModel() updates modelName via API", async () => {
+    useConversationStore.setState({
+      conversations: [aConversation({ id: "c-1", modelName: "gemma3:1b" })],
+    });
+    vi.spyOn(apiClient, "patch").mockResolvedValueOnce(
+      aConversation({ id: "c-1", modelName: "qwen2.5:7b" })
+    );
+
+    await useConversationStore.getState().updateConversationModel("c-1", "qwen2.5:7b");
+
+    expect(apiClient.patch).toHaveBeenCalledWith("/api/conversations/c-1", {
+      modelName: "qwen2.5:7b",
+    });
+    expect(useConversationStore.getState().conversations[0].modelName).toBe("qwen2.5:7b");
+  });
+
   it("reset() clears conversations and the open thread", () => {
     useConversationStore.setState({
       conversations: [aConversation()],

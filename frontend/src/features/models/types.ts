@@ -10,11 +10,11 @@ export interface ModelInfo {
 /** Mirrors the backend `ModelResponse`. */
 export interface ModelListResponse {
   models: ModelInfo[];
+  defaultModel?: string;
 }
 
 /** One entry of the model dropdown. */
 export interface ModelOption {
   id: string;
   label: string;
-  badge: string;
 }

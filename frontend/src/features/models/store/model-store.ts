@@ -1,9 +1,10 @@
 import { create } from "zustand";
 import { modelsApi } from "../api/models-api";
-import { DEFAULT_MODEL, DEFAULT_MODEL_CAPABILITIES } from "../constants";
-import { inferToolSupport, supportsTools } from "../lib/model-capabilities";
+import { supportsTools } from "../lib/model-capabilities";
+import type { ModelInfo } from "../types";
 
 export interface ModelState {
+  models: ModelInfo[];
   availableModels: string[];
   selectedModel: string;
   /** Tool support per model name. */
@@ -17,9 +18,10 @@ export interface ModelState {
 }
 
 export const useModelStore = create<ModelState>((set, get) => ({
-  availableModels: [DEFAULT_MODEL],
-  selectedModel: DEFAULT_MODEL,
-  modelCapabilities: DEFAULT_MODEL_CAPABILITIES,
+  models: [],
+  availableModels: [],
+  selectedModel: "",
+  modelCapabilities: {},
   toolsEnabled: false,
 
   loadModels: async () => {
@@ -30,26 +32,32 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
       const names = models.map((m) => m.name);
       const capabilities = Object.fromEntries(
-        models.map((m) => [m.name, m.supportsTools ?? inferToolSupport(m.name)])
+        models.map((m) => [m.name, Boolean(m.supportsTools)])
       );
+      const defaultCandidate =
+        response?.defaultModel && names.includes(response.defaultModel)
+          ? response.defaultModel
+          : names[0];
       const current = get().selectedModel;
-      const selectedModel = names.includes(current) ? current : names[0];
+      const selectedModel = current && names.includes(current) ? current : defaultCandidate;
+      const isToolSupported = supportsTools(selectedModel, capabilities);
 
-      set((state) => ({
+      set({
+        models,
         availableModels: names,
         modelCapabilities: capabilities,
         selectedModel,
-        toolsEnabled: state.toolsEnabled && supportsTools(selectedModel, capabilities),
-      }));
+        toolsEnabled: isToolSupported,
+      });
     } catch (error) {
-      console.warn("Failed to query Ollama models, keeping defaults:", error);
+      console.warn("Failed to query Ollama models:", error);
     }
   },
 
   setSelectedModel: (model) =>
     set((state) => ({
       selectedModel: model,
-      toolsEnabled: state.toolsEnabled && supportsTools(model, state.modelCapabilities),
+      toolsEnabled: supportsTools(model, state.modelCapabilities),
     })),
 
   setToolsEnabled: (enabled) => set({ toolsEnabled: enabled }),

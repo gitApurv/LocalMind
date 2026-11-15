@@ -30,6 +30,21 @@ describe("useModelStore", () => {
     });
   });
 
+  it("loadModels() uses the backend defaultModel when available", async () => {
+    vi.spyOn(apiClient, "get").mockResolvedValueOnce({
+      models: [
+        { name: "gemma3:1b", supportsTools: false },
+        { name: "qwen2.5:7b", supportsTools: true },
+      ],
+      defaultModel: "qwen2.5:7b",
+    });
+
+    await useModelStore.getState().loadModels();
+
+    expect(useModelStore.getState().selectedModel).toBe("qwen2.5:7b");
+    expect(useModelStore.getState().toolsEnabled).toBe(true);
+  });
+
   it("loadModels() falls back to the first model when the selected one is missing", async () => {
     useModelStore.setState({ selectedModel: "llama3.2", toolsEnabled: true });
     vi.spyOn(apiClient, "get").mockResolvedValueOnce({
@@ -42,23 +57,26 @@ describe("useModelStore", () => {
     expect(useModelStore.getState().toolsEnabled).toBe(false);
   });
 
-  it("loadModels() keeps the defaults when the backend is unreachable", async () => {
+  it("loadModels() preserves state when the backend is unreachable", async () => {
+    useModelStore.setState({ availableModels: ["cached-model"] });
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.spyOn(apiClient, "get").mockRejectedValueOnce({ status: 0, message: "offline" });
 
     await useModelStore.getState().loadModels();
 
-    expect(useModelStore.getState().availableModels).toEqual(["gemma3:1b"]);
+    expect(useModelStore.getState().availableModels).toEqual(["cached-model"]);
   });
 
-  it("setSelectedModel() switches tools off for models that cannot call them", () => {
-    useModelStore.setState({ toolsEnabled: true });
+  it("setSelectedModel() automatically enables tools for models that support them", () => {
+    useModelStore.setState({
+      modelCapabilities: { "qwen2.5:7b": true, "gemma3:1b": false },
+      toolsEnabled: false,
+    });
+
+    useModelStore.getState().setSelectedModel("qwen2.5:7b");
+    expect(useModelStore.getState().toolsEnabled).toBe(true);
 
     useModelStore.getState().setSelectedModel("gemma3:1b");
     expect(useModelStore.getState().toolsEnabled).toBe(false);
-
-    useModelStore.getState().setToolsEnabled(true);
-    useModelStore.getState().setSelectedModel("qwen2.5:7b");
-    expect(useModelStore.getState().toolsEnabled).toBe(true);
   });
 });
