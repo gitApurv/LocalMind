@@ -250,7 +250,7 @@ public class ChatOrchestratorService {
             String details = collectMessages(error);
             if (details.contains(TOOLS_UNSUPPORTED_MARKER) || (details.contains("400") && details.contains("tools"))) {
                 return "Model '" + model + "' does not support tool calling in Ollama. Please disable Tools or "
-                        + "select a tool-compatible model (e.g., qwen2.5:7b).";
+                        + "select a tool-compatible model.";
             }
             return STREAM_FAILED_MESSAGE;
         }

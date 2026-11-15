@@ -22,7 +22,7 @@ class PromptStatsAdvisorTest {
     void beforeComputesAndLogsPromptTokens() {
         Prompt prompt = new Prompt(List.of(new SystemMessage("You are a helpful assistant."),
                 new UserMessage("What is the capital of France?")));
-        ModelProfile profile = ModelProfile.defaultProfile("gemma3:1b");
+        ModelProfile profile = ModelProfile.generic("test-model", false);
         ChatClientRequest request = ChatClientRequest.builder().prompt(prompt).context(Map.of("modelProfile", profile))
                 .build();
 

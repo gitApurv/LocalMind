@@ -1,31 +1,53 @@
 package com.localmind.llm.service;
 
 import com.localmind.llm.model.ModelProfile;
-import java.util.List;
+import java.util.Collection;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
 
 /**
- * Looks up the {@link ModelProfile} for a model name. Unknown models get a generic profile whose tool support is
- * inferred from the model family name.
+ * Registry of active {@link ModelProfile}s dynamically populated from Ollama metadata on server startup. Contains no
+ * hardcoded model profiles or static capability heuristics.
  */
 @Component
 public class ModelProfileRegistry {
 
-    private static final List<ModelProfile> KNOWN_PROFILES = List.of(ModelProfile.defaultProfile("gemma3:1b"),
-            new ModelProfile("qwen2.5:7b", 16384, 2048, 4000, 8000, true),
-            new ModelProfile("deepseek-r1:1.5b", 8192, 2048, 2000, 3000, false),
-            new ModelProfile("deepseek-r1:8b", 16384, 4096, 4000, 6000, false));
+    private final Map<String, ModelProfile> profiles = new ConcurrentHashMap<>();
 
-    private static final List<String> TOOL_CAPABLE_HINTS = List.of("tools", "qwen", "llama", "mistral");
+    public void registerProfile(ModelProfile profile) {
+        if (profile == null || profile.modelName() == null || profile.modelName().isBlank()) {
+            return;
+        }
+        profiles.put(normalize(profile.modelName()), profile);
+    }
+
+    public void registerProfiles(Collection<ModelProfile> newProfiles) {
+        if (newProfiles != null) {
+            newProfiles.forEach(this::registerProfile);
+        }
+    }
 
     public ModelProfile getProfile(String modelName) {
         if (modelName == null || modelName.isBlank()) {
-            return KNOWN_PROFILES.getFirst();
+            return profiles.values().stream().findFirst().orElseGet(() -> ModelProfile.generic("default", false));
         }
-        String normalized = modelName.trim().toLowerCase(Locale.ROOT);
-        return KNOWN_PROFILES.stream().filter(profile -> normalized.contains(profile.modelName())).findFirst()
-                .orElseGet(() -> ModelProfile.generic(modelName,
-                        TOOL_CAPABLE_HINTS.stream().anyMatch(normalized::contains)));
+        String normalized = normalize(modelName);
+        ModelProfile profile = profiles.get(normalized);
+        if (profile != null) {
+            return profile;
+        }
+        for (Map.Entry<String, ModelProfile> entry : profiles.entrySet()) {
+            String key = entry.getKey();
+            if (key.startsWith(normalized + ":") || normalized.startsWith(key + ":")) {
+                return entry.getValue();
+            }
+        }
+        return ModelProfile.generic(modelName.trim(), false);
+    }
+
+    private static String normalize(String name) {
+        return name.trim().toLowerCase(Locale.ROOT);
     }
 }

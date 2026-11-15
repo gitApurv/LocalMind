@@ -19,3 +19,5 @@ localmind:
     key-file: ${java.io.tmpdir}/localmind-test-jwt-signing-key.pem
   storage:
     upload-dir: ${java.io.tmpdir}/localmind-test-uploads
+  llm:
+    validate-models-on-startup: false

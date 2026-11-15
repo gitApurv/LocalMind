@@ -17,6 +17,7 @@ import com.localmind.tools.service.WebScraperTools;
 import com.localmind.tools.service.WebSearchTools;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
@@ -24,6 +25,11 @@ import org.springframework.ai.tool.function.FunctionToolCallback;
 class ToolSelectorTest {
     private final ModelProfileRegistry registry = new ModelProfileRegistry();
     private final AttachmentRepository attachmentRepository = mock(AttachmentRepository.class);
+
+    @BeforeEach
+    void setUp() {
+        registry.registerProfile(com.localmind.llm.model.ModelProfile.generic("qwen2.5:7b", true));
+    }
 
     private static ToolCallback dummyCallback(String name) {
         return FunctionToolCallback.builder(name, (Map<String, Object> req) -> "ok").description(name)

@@ -1,6 +1,8 @@
 package com.localmind.llm.controller;
 
 import static org.hamcrest.Matchers.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -10,8 +12,10 @@ import com.localmind.common.security.CorsProperties;
 import com.localmind.common.security.JwtProperties;
 import com.localmind.common.security.SecurityConfig;
 import com.localmind.llm.config.LlmProperties;
+import com.localmind.llm.dto.ModelInfo;
+import com.localmind.llm.dto.ModelResponse;
 import com.localmind.llm.service.ModelCatalogService;
-import com.localmind.llm.service.ModelProfileRegistry;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,17 +35,24 @@ class ModelControllerTest {
 
     @TestConfiguration
     @EnableConfigurationProperties({LlmProperties.class, JwtProperties.class, CorsProperties.class})
-    @Import({ModelCatalogService.class, ModelProfileRegistry.class, SecurityConfig.class})
+    @Import(SecurityConfig.class)
     static class TestConfig {
-        /** The slice has no RestClient auto-configuration; WebMvcConfig derives its client from this builder. */
         @Bean
         public RestClient.Builder restClientBuilder() {
             return RestClient.builder();
+        }
+
+        @Bean
+        public ModelCatalogService modelCatalogService() {
+            return mock(ModelCatalogService.class);
         }
     }
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ModelCatalogService modelCatalogService;
 
     @Test
     @DisplayName("GET /api/models unauthenticated should return 401 Unauthorized")
@@ -52,10 +63,16 @@ class ModelControllerTest {
     @Test
     @DisplayName("GET /api/models authenticated should return available models list")
     void listModelsAuthenticated() throws Exception {
+        when(modelCatalogService.listAvailableModels()).thenReturn(
+                new ModelResponse(List.of(new ModelInfo("test-model", "test-model", 100L, "2026-01-01", true)),
+                        "test-model"));
+
         mockMvc.perform(
                 get("/api/models").with(jwt().jwt(jwt -> jwt.subject("user-1").claim("email", "user@example.com"))))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.models", notNullValue()))
-                .andExpect(jsonPath("$.models", hasSize(greaterThanOrEqualTo(1))))
-                .andExpect(jsonPath("$.models[0].supportsTools", notNullValue()));
+                .andExpect(jsonPath("$.models", hasSize(1)))
+                .andExpect(jsonPath("$.models[0].name", is("test-model")))
+                .andExpect(jsonPath("$.models[0].supportsTools", is(true)))
+                .andExpect(jsonPath("$.defaultModel", is("test-model")));
     }
 }
