@@ -7,17 +7,19 @@ import com.localmind.llm.dto.ModelInfo;
 import com.localmind.llm.dto.ModelResponse;
 import com.localmind.llm.model.ModelProfile;
 import jakarta.annotation.PostConstruct;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 /**
- * Fetches models and their capabilities from Ollama on server startup and caches them for the complete lifecycle of the
- * application. Contains no hardcoded model registries or fallbacks.
+ * Fetches models and their capabilities from Ollama and caches them. The list is loaded at startup (and validated there
+ * when {@code localmind.llm.validate-models-on-startup} is on), then reloaded on demand when it is empty or older than
+ * {@link #CACHE_TTL}, so models pulled later appear without a restart. Reloads during requests never throw and are
+ * attempted at most once per {@link #RETRY_INTERVAL} while Ollama is unreachable. There are no hardcoded model lists.
  */
 @Slf4j
 @Service
@@ -25,11 +27,15 @@ public class ModelCatalogService {
 
     private static final String TOOLS_CAPABILITY = "tools";
     private static final String COMPLETION_CAPABILITY = "completion";
+    private static final String LATEST_TAG = ":latest";
+    static final Duration CACHE_TTL = Duration.ofMinutes(5);
+    static final Duration RETRY_INTERVAL = Duration.ofSeconds(30);
 
     private final RestClient restClient;
     private final LlmProperties llmProperties;
     private final ModelProfileRegistry modelProfileRegistry;
     private volatile CachedModels cachedModels;
+    private volatile Instant lastAttempt;
 
     public ModelCatalogService(RestClient shortTimeoutRestClient, LlmProperties llmProperties,
             ModelProfileRegistry modelProfileRegistry) {
@@ -43,54 +49,72 @@ public class ModelCatalogService {
         refreshCatalog();
     }
 
-    @EventListener(ApplicationReadyEvent.class)
-    public void onApplicationReady() {
-        if (cachedModels == null || cachedModels.models().isEmpty()) {
-            refreshCatalog();
+    /**
+     * Startup load. With validation on, an unreachable Ollama or a missing default model throws, which fails startup
+     * because it runs from {@code @PostConstruct}.
+     */
+    public synchronized void refreshCatalog() {
+        load(llmProperties.validateModelsOnStartup());
+    }
+
+    /** Request-time reload of an empty or stale catalogue. Never throws; failures keep the previous list. */
+    synchronized void refreshIfStale() {
+        Instant now = Instant.now();
+        CachedModels cache = cachedModels;
+        boolean fresh = cache != null && !cache.models().isEmpty() && cache.fetchedAt().plus(CACHE_TTL).isAfter(now);
+        boolean retriedRecently = lastAttempt != null && lastAttempt.plus(RETRY_INTERVAL).isAfter(now);
+        if (fresh || retriedRecently) {
+            return;
+        }
+        try {
+            load(false);
+        } catch (RuntimeException e) {
+            log.warn("Could not refresh the model catalogue: {}", e.getMessage());
         }
     }
 
-    public synchronized void refreshCatalog() {
+    private void load(boolean validate) {
+        lastAttempt = Instant.now();
         OllamaTagsResponse response;
         try {
-            response = restClient.get().uri(llmProperties.ollamaBaseUrl() + "/api/tags")
-                    .accept(MediaType.APPLICATION_JSON).retrieve().body(OllamaTagsResponse.class);
+            String tagsUrl = llmProperties.ollamaBaseUrl() + "/api/tags";
+            response = restClient.get().uri(tagsUrl).accept(MediaType.APPLICATION_JSON).retrieve()
+                    .body(OllamaTagsResponse.class);
         } catch (Exception e) {
-            if (llmProperties.validateModelsOnStartup()) {
-                throw new IllegalStateException("Failed to connect to Ollama at '" + llmProperties.ollamaBaseUrl()
+            if (validate) {
+                String message = "Failed to connect to Ollama at '" + llmProperties.ollamaBaseUrl()
                         + "'. LocalMind requires Ollama to be running on startup with models '"
-                        + llmProperties.defaultModel() + "' and '" + llmProperties.defaultEmbeddingModel() + "'.", e);
+                        + llmProperties.defaultModel() + "' and '" + llmProperties.defaultEmbeddingModel() + "'.";
+                throw new IllegalStateException(message, e);
             }
-            log.warn("Failed to fetch model tags from Ollama on startup at '{}': {}", llmProperties.ollamaBaseUrl(),
+            log.warn("Failed to fetch model tags from Ollama at '{}': {}", llmProperties.ollamaBaseUrl(),
                     e.getMessage());
-            if (this.cachedModels == null) {
-                this.cachedModels = new CachedModels(List.of(), llmProperties.defaultModel());
+            if (cachedModels == null) {
+                cachedModels = new CachedModels(List.of(), llmProperties.defaultModel(), Instant.now());
             }
             return;
         }
 
         List<OllamaTagModel> rawModels = response != null && response.models() != null ? response.models() : List.of();
-
-        if (llmProperties.validateModelsOnStartup()) {
+        if (validate) {
             validateRequiredModels(rawModels);
         }
-
         List<OllamaTagModel> chatModels = rawModels.stream().filter(this::isChatCapable).toList();
+        chatModels.forEach(this::registerProfiles);
         List<ModelInfo> modelInfoList = chatModels.stream().map(this::toModelInfo).toList();
-
-        for (OllamaTagModel tag : chatModels) {
-            boolean toolSupport = isToolCapable(tag.capabilities());
-            Integer contextLength = tag.details() != null ? tag.details().contextLength() : null;
-            modelProfileRegistry.registerProfile(ModelProfile.fromOllama(tag.name(), contextLength, toolSupport));
-            if (tag.model() != null && !tag.model().equals(tag.name())) {
-                modelProfileRegistry.registerProfile(ModelProfile.fromOllama(tag.model(), contextLength, toolSupport));
-            }
-        }
-
         String defaultModel = resolveDefaultModel(modelInfoList);
-        this.cachedModels = new CachedModels(List.copyOf(modelInfoList), defaultModel);
-        log.info("Initialized model catalog from Ollama with {} models. Default model: '{}'", modelInfoList.size(),
+        cachedModels = new CachedModels(List.copyOf(modelInfoList), defaultModel, Instant.now());
+        log.info("Loaded model catalogue from Ollama with {} models. Default model: '{}'", modelInfoList.size(),
                 defaultModel);
+    }
+
+    private void registerProfiles(OllamaTagModel tag) {
+        boolean toolSupport = isToolCapable(tag.capabilities());
+        Integer contextLength = tag.details() != null ? tag.details().contextLength() : null;
+        modelProfileRegistry.registerProfile(ModelProfile.fromOllama(tag.name(), contextLength, toolSupport));
+        if (tag.model() != null && !tag.model().equals(tag.name())) {
+            modelProfileRegistry.registerProfile(ModelProfile.fromOllama(tag.model(), contextLength, toolSupport));
+        }
     }
 
     void validateRequiredModels(List<OllamaTagModel> installedModels) {
@@ -138,37 +162,38 @@ public class ModelCatalogService {
     }
 
     public ModelResponse listAvailableModels() {
-        if (cachedModels == null || cachedModels.models().isEmpty()) {
-            refreshCatalog();
+        refreshIfStale();
+        CachedModels cache = cachedModels;
+        if (cache == null) {
+            return new ModelResponse(List.of(), llmProperties.defaultModel());
         }
-        return new ModelResponse(cachedModels.models(), cachedModels.defaultModel());
+        return new ModelResponse(cache.models(), cache.defaultModel());
     }
 
-    public String getDefaultModel() {
-        if (cachedModels == null) {
-            refreshCatalog();
-        }
-        return cachedModels != null ? cachedModels.defaultModel() : llmProperties.defaultModel();
-    }
-
-    /** Whether tool calling should be offered to {@code modelName}. */
+    /**
+     * Whether tool calling should be offered to {@code modelName}. A name without a tag matches its {@code :latest}
+     * tag, as in Ollama; other tags of the same model are different models and never match.
+     */
     public boolean supportsTools(String modelName) {
         if (modelName == null || modelName.isBlank()) {
             return false;
         }
-        if (cachedModels == null) {
-            refreshCatalog();
-        }
-        if (cachedModels != null) {
+        refreshIfStale();
+        CachedModels cache = cachedModels;
+        if (cache != null) {
             String trimmed = modelName.trim();
-            for (ModelInfo info : cachedModels.models()) {
-                if (info.name().equalsIgnoreCase(trimmed) || info.model().equalsIgnoreCase(trimmed)
-                        || info.name().startsWith(trimmed + ":") || trimmed.startsWith(info.name() + ":")) {
+            for (ModelInfo info : cache.models()) {
+                if (matchesName(info.name(), trimmed) || matchesName(info.model(), trimmed)) {
                     return info.supportsTools();
                 }
             }
         }
         return modelProfileRegistry.getProfile(modelName).toolSupported();
+    }
+
+    private static boolean matchesName(String candidate, String requested) {
+        return candidate != null
+                && (candidate.equalsIgnoreCase(requested) || candidate.equalsIgnoreCase(requested + LATEST_TAG));
     }
 
     public boolean isToolCapable(List<String> capabilities) {
@@ -187,8 +212,8 @@ public class ModelCatalogService {
     }
 
     private ModelInfo toModelInfo(OllamaTagModel tag) {
-        return new ModelInfo(tag.name(), tag.model(), tag.size(), tag.modifiedAt(),
-                isToolCapable(tag.capabilities()));
+        boolean toolSupport = isToolCapable(tag.capabilities());
+        return new ModelInfo(tag.name(), tag.model(), tag.size(), tag.modifiedAt(), toolSupport);
     }
 
     private String resolveDefaultModel(List<ModelInfo> models) {
@@ -204,7 +229,7 @@ public class ModelCatalogService {
         return models.isEmpty() ? configured : models.getFirst().name();
     }
 
-    private record CachedModels(List<ModelInfo> models, String defaultModel) {
+    private record CachedModels(List<ModelInfo> models, String defaultModel, Instant fetchedAt) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

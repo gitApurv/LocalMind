@@ -42,8 +42,23 @@ class ModelProfileRegistryTest {
     }
 
     @Test
-    void blankModelNameFallsBackToRegisteredOrGeneric() {
+    void blankModelNameGetsGenericProfile() {
+        registry.registerProfile(ModelProfile.fromOllama("big-model:latest", 32768, true));
+
         ModelProfile profile = registry.getProfile(" ");
-        assertNotNull(profile);
+
+        assertEquals("default", profile.modelName());
+        assertEquals(8192, profile.numCtx());
+        assertFalse(profile.toolSupported());
+    }
+
+    @Test
+    void bareNameDoesNotMatchANonLatestTag() {
+        registry.registerProfile(ModelProfile.fromOllama("qwen2.5:7b", 32768, true));
+
+        ModelProfile profile = registry.getProfile("qwen2.5");
+
+        assertEquals("qwen2.5", profile.modelName());
+        assertFalse(profile.toolSupported());
     }
 }

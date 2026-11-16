@@ -18,14 +18,16 @@ public record ModelProfile(String modelName, int numCtx, int outputReserve, int 
         boolean toolSupported) {
 
     public static ModelProfile fromOllama(String modelName, Integer contextLength, boolean toolSupported) {
-        int ctx = (contextLength != null && contextLength > 0)
-                ? Math.min(Math.max(contextLength, 4096), 32768)
-                : 8192;
+        int ctx = (contextLength != null && contextLength > 0) ? clampContext(contextLength) : 8192;
         int reserve = Math.min(2048, ctx / 4);
         int remaining = ctx - reserve;
         int rag = Math.max(1000, (int) (remaining * 0.35));
         int history = Math.max(1000, (int) (remaining * 0.55));
         return new ModelProfile(modelName, ctx, reserve, rag, history, toolSupported);
+    }
+
+    private static int clampContext(int contextLength) {
+        return Math.min(Math.max(contextLength, 4096), 32768);
     }
 
     /** Budget used for models without dedicated Ollama context metrics. */

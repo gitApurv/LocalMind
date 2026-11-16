@@ -3,9 +3,7 @@ package com.localmind.llm.config;
 import java.util.Objects;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-/**
- * Model configuration properties for Ollama integration.
- */
+/** Ollama connection and default model selection. */
 @ConfigurationProperties(prefix = "localmind.llm")
 public record LlmProperties(String defaultModel, String defaultEmbeddingModel, String ollamaBaseUrl,
         boolean validateModelsOnStartup) {
@@ -20,13 +18,7 @@ public record LlmProperties(String defaultModel, String defaultEmbeddingModel, S
         ollamaBaseUrl = stripTrailingSlash(Objects.requireNonNullElse(ollamaBaseUrl, FALLBACK_OLLAMA_BASE_URL));
     }
 
-    public static LlmProperties defaults() {
-        return new LlmProperties(null, null, null, false);
-    }
-
-    /**
-     * Returns the first non-blank candidate (trimmed), or the configured default model.
-     */
+    /** Returns the first non-blank candidate (trimmed), or the configured default model. */
     public String resolveModel(String... candidates) {
         for (String candidate : candidates) {
             if (!isBlank(candidate)) {
