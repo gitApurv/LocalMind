@@ -13,9 +13,7 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Lets users review, pin and delete the long-term memories the model saved about them.
- */
+/** Lets users review, pin and delete the long-term memories the model saved about them. */
 @Service
 @RequiredArgsConstructor
 public class MemoryService {
@@ -33,13 +31,15 @@ public class MemoryService {
     public MemoryResponse updateMemory(String memoryId, String userId, UpdateMemoryRequest request) {
         UserMemory memory = findMemory(memoryId, userId);
         memory.setPinned(request.pinned());
-        return MemoryResponse.from(userMemoryRepository.save(memory));
+        UserMemory saved = userMemoryRepository.save(memory);
+        return MemoryResponse.from(saved);
     }
 
     /** Removes the memory and, once the deletion commits, its embedding. */
     @Transactional
     public void deleteMemory(String memoryId, String userId) {
-        userMemoryRepository.delete(findMemory(memoryId, userId));
+        UserMemory memory = findMemory(memoryId, userId);
+        userMemoryRepository.delete(memory);
         TransactionHooks.afterCommit(() -> vectorStore.delete(VectorFilters.userMemory(userId, memoryId)));
     }
 

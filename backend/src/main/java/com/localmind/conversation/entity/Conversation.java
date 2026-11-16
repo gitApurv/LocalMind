@@ -3,6 +3,7 @@ package com.localmind.conversation.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
@@ -15,7 +16,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "conversations")
+@Table(name = "conversations", indexes = {
+        // Sidebar list: findByUserIdOrderByUpdatedAtDesc.
+        @Index(name = "idx_conversations_user_updated", columnList = "user_id, updated_at")})
 @Getter
 @Setter
 @NoArgsConstructor

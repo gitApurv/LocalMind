@@ -3,8 +3,8 @@ package com.localmind.chat.prompt;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import com.localmind.chat.config.PromptProperties;
 import com.localmind.memory.repository.UserMemoryRepository;
+import com.localmind.support.TestProperties;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -40,7 +40,7 @@ class MemoryRetrievalAdvisorTest {
     private final UserMemoryRepository memoryRepository = mock(UserMemoryRepository.class);
     private final TokenCounter tokenCounter = new CharacterTokenCounter();
     private final MemoryRetrievalAdvisor advisor = new MemoryRetrievalAdvisor(vectorStore, memoryRepository,
-            tokenCounter, PromptProperties.defaults());
+            tokenCounter, TestProperties.promptDefaults());
 
     @Test
     void augmentsSystemMessageWithRetrievedMemories() {
@@ -57,5 +57,19 @@ class MemoryRetrievalAdvisorTest {
         String systemText = result.prompt().getSystemMessage().getText();
         assertTrue(systemText.contains("Relevant User Memories:"));
         assertTrue(systemText.contains("User prefers dark mode"));
+    }
+
+    @Test
+    void returnsRequestUnchangedWhenVectorSearchFails() {
+        MemoryRetrievalAdvisor failing = new MemoryRetrievalAdvisor(new TestVectorStore() {
+            @Override
+            public List<Document> similaritySearch(SearchRequest request) {
+                throw new IllegalStateException("Qdrant unavailable");
+            }
+        }, memoryRepository, tokenCounter, TestProperties.promptDefaults());
+        ChatClientRequest request = ChatClientRequest.builder().prompt(new Prompt("What do I like?"))
+                .context(Map.of("userId", "u1")).build();
+
+        assertSame(request, failing.before(request, mock(AdvisorChain.class)));
     }
 }

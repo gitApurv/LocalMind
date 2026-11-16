@@ -30,14 +30,16 @@ class StreamingTagParser {
                 int thinkStart = text.indexOf(THINK_OPEN);
                 if (thinkStart != -1) {
                     if (thinkStart > 0) {
-                        emitContent(text.substring(0, thinkStart), sink);
+                        String beforeTag = text.substring(0, thinkStart);
+                        emitContent(beforeTag, sink);
                     }
                     insideThink = true;
                     text = text.substring(thinkStart + THINK_OPEN.length());
                 } else {
                     int candidate = findPartialTagStart(text, THINK_OPEN);
                     if (candidate != -1) {
-                        emitContent(text.substring(0, candidate), sink);
+                        String beforePartial = text.substring(0, candidate);
+                        emitContent(beforePartial, sink);
                         pending = text.substring(candidate);
                         text = "";
                     } else {
@@ -49,14 +51,16 @@ class StreamingTagParser {
                 int thinkEnd = text.indexOf(THINK_CLOSE);
                 if (thinkEnd != -1) {
                     if (thinkEnd > 0) {
-                        emitReasoning(text.substring(0, thinkEnd), sink);
+                        String reasoning = text.substring(0, thinkEnd);
+                        emitReasoning(reasoning, sink);
                     }
                     insideThink = false;
                     text = text.substring(thinkEnd + THINK_CLOSE.length());
                 } else {
                     int candidate = findPartialTagStart(text, THINK_CLOSE);
                     if (candidate != -1) {
-                        emitReasoning(text.substring(0, candidate), sink);
+                        String reasoningBeforePartial = text.substring(0, candidate);
+                        emitReasoning(reasoningBeforePartial, sink);
                         pending = text.substring(candidate);
                         text = "";
                     } else {
@@ -93,14 +97,16 @@ class StreamingTagParser {
     private void emitContent(String text, FluxSink<ChatEvent> sink) {
         if (!text.isEmpty()) {
             contentBuffer.append(text);
-            sink.next(ChatEvent.content(text));
+            ChatEvent event = ChatEvent.content(text);
+            sink.next(event);
         }
     }
 
     private void emitReasoning(String text, FluxSink<ChatEvent> sink) {
         if (!text.isEmpty()) {
             thinkBuffer.append(text);
-            sink.next(ChatEvent.reasoning(text));
+            ChatEvent event = ChatEvent.reasoning(text);
+            sink.next(event);
         }
     }
 

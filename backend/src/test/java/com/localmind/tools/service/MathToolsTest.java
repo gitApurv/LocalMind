@@ -24,7 +24,7 @@ class MathToolsTest {
     void evaluateValidExpressions(String expression, String expected) {
         String result = mathTools.calculateExpression(expression);
         assertNotNull(result);
-        // Normalize double representation if needed (e.g. 4 vs 4.0)
+        // Normalize double representation if needed (e.g. 4 vs 4.0).
         double expectedVal = Double.parseDouble(expected);
         double actualVal = Double.parseDouble(result);
         assertEquals(expectedVal, actualVal, 0.0001);
@@ -72,5 +72,12 @@ class MathToolsTest {
         String jsonResult = callback.call("{\"expression\": \"7 * 8\"}");
         assertNotNull(jsonResult);
         assertTrue(jsonResult.contains("56"));
+    }
+
+    @Test
+    @DisplayName("calculateExpression() errors should be fixed messages without exception text")
+    void errorsDoNotLeakExceptionText() {
+        assertEquals("Error: Division by zero.", mathTools.calculateExpression("1 / 0"));
+        assertEquals("Error: Invalid mathematical syntax.", mathTools.calculateExpression("2 +* 3"));
     }
 }

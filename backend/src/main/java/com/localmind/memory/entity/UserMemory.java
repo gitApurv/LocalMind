@@ -3,6 +3,7 @@ package com.localmind.memory.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import java.time.Instant;
@@ -14,7 +15,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "user_memories")
+@Table(name = "user_memories", indexes = {
+        // Memory vault (newest first) and the pinned-memory lookup on every chat turn.
+        @Index(name = "idx_user_memories_user_created", columnList = "user_id, created_at")})
 @Getter
 @Setter
 @NoArgsConstructor

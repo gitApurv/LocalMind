@@ -13,6 +13,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.stereotype.Component;
 
 @Slf4j
@@ -45,9 +46,10 @@ public class DocumentSearchTools {
 
         String trimmedQuery = query.trim();
         try {
-            List<Document> matches = vectorStore.similaritySearch(
-                    SearchRequest.builder().query(trimmedQuery).topK(TOP_K).similarityThreshold(SIMILARITY_THRESHOLD)
-                            .filterExpression(VectorFilters.documentChunks(userId, conversationId)).build());
+            Filter.Expression filter = VectorFilters.documentChunks(userId, conversationId);
+            SearchRequest searchRequest = SearchRequest.builder().query(trimmedQuery).topK(TOP_K)
+                    .similarityThreshold(SIMILARITY_THRESHOLD).filterExpression(filter).build();
+            List<Document> matches = vectorStore.similaritySearch(searchRequest);
             if (matches == null || matches.isEmpty()) {
                 return "No relevant information found in uploaded documents for query: '" + trimmedQuery + "'.";
             }
@@ -66,9 +68,10 @@ public class DocumentSearchTools {
             Object fileName = document.getMetadata() != null
                     ? document.getMetadata().get(VectorMetadata.FILE_NAME)
                     : null;
-            text.append("--- Excerpt ").append(i + 1).append(" (Source: ")
-                    .append(fileName != null ? fileName : "Unknown Document").append(") ---\n")
-                    .append(document.getText() != null ? document.getText().trim() : "").append("\n\n");
+            Object source = fileName != null ? fileName : "Unknown Document";
+            String excerpt = document.getText() != null ? document.getText().trim() : "";
+            text.append("--- Excerpt ").append(i + 1).append(" (Source: ").append(source).append(") ---\n")
+                    .append(excerpt).append("\n\n");
         }
         return text.toString().trim();
     }

@@ -5,7 +5,7 @@ import static org.mockito.Mockito.*;
 
 import com.localmind.attachment.entity.Attachment;
 import com.localmind.attachment.repository.AttachmentRepository;
-import com.localmind.chat.config.PromptProperties;
+import com.localmind.support.TestProperties;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -43,7 +43,7 @@ class AutoRagAdvisorTest {
     private final AttachmentRepository attachmentRepository = mock(AttachmentRepository.class);
     private final TokenCounter tokenCounter = new CharacterTokenCounter();
     private final AutoRagAdvisor advisor = new AutoRagAdvisor(vectorStore, attachmentRepository, tokenCounter,
-            PromptProperties.defaults());
+            TestProperties.promptDefaults());
 
     @Test
     void skipsRetrievalIfConversationHasNoReadyAttachments() {
@@ -76,5 +76,15 @@ class AutoRagAdvisorTest {
         assertTrue(userText.contains("<reference source=\"report.pdf\">"));
         assertTrue(userText.contains("Report content summary"));
         assertTrue(userText.contains("Summarize report"));
+    }
+
+    @Test
+    void returnsRequestUnchangedWhenAttachmentLookupFails() {
+        when(attachmentRepository.existsByConversationIdAndStatus(any(), any()))
+                .thenThrow(new IllegalStateException("database unavailable"));
+        ChatClientRequest request = ChatClientRequest.builder().prompt(new Prompt("What does the spec say?"))
+                .context(Map.of("conversationId", "c1", "userId", "u1")).build();
+
+        assertSame(request, advisor.before(request, mock(AdvisorChain.class)));
     }
 }

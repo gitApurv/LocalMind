@@ -1,11 +1,13 @@
 package com.localmind.tools.service;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.extern.slf4j.Slf4j;
 import net.objecthunter.exp4j.ExpressionBuilder;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.stereotype.Component;
 
+@Slf4j
 @Component
 public class MathTools {
 
@@ -21,12 +23,16 @@ public class MathTools {
             return "Error: Expression cannot be null or blank.";
         }
         try {
-            return format(new ExpressionBuilder(expression.trim()).build().evaluate());
+            double result = new ExpressionBuilder(expression.trim()).build().evaluate();
+            return format(result);
         } catch (ArithmeticException e) {
-            return "Error: Division by zero: " + e.getMessage();
+            log.debug("Arithmetic error in expression '{}': {}", expression, e.getMessage());
+            return "Error: Division by zero.";
         } catch (IllegalArgumentException e) {
-            return "Error: Invalid mathematical syntax: " + e.getMessage();
+            log.debug("Invalid expression '{}': {}", expression, e.getMessage());
+            return "Error: Invalid mathematical syntax.";
         } catch (Exception e) {
+            log.debug("Expression '{}' could not be evaluated", expression, e);
             return "Error: the expression could not be evaluated.";
         }
     }

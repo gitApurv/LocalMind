@@ -14,9 +14,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
-/**
- * Web search through a self-hosted SearXNG instance.
- */
+/** Web search through a self-hosted SearXNG instance. */
 @Slf4j
 @Component
 public class WebSearchTools {
@@ -25,6 +23,8 @@ public class WebSearchTools {
     private static final String DESCRIPTION = "Search the web for current, up-to-date real-time information via "
             + "privacy-preserving search engine. Returns top results with titles, URLs, and summaries.";
     private static final int MAX_RESULTS = 5;
+    private static final String UNAVAILABLE = "Error: Web search is unavailable right now. Answer without web results "
+            + "and tell the user that search could not be reached.";
 
     private final RestClient restClient;
     private final SearxngProperties properties;
@@ -48,34 +48,45 @@ public class WebSearchTools {
         this.properties = properties;
     }
 
+    /** Throws when SearXNG cannot be reached or answers with an error, so callers can tell that from no results. */
     List<SearchResult> searchWeb(String query) {
         if (query == null || query.isBlank()) {
             return List.of();
         }
-        try {
-            URI searchUri = UriComponentsBuilder.fromUriString(properties.baseUrl() + "/search")
-                    .queryParam("q", query.trim()).queryParam("format", "json").build().toUri();
-            SearxngResponse response = restClient.get().uri(searchUri).accept(MediaType.APPLICATION_JSON).retrieve()
-                    .body(SearxngResponse.class);
-            if (response == null || response.results() == null) {
-                return List.of();
-            }
-            return response.results().stream().limit(MAX_RESULTS)
-                    .map(item -> new SearchResult(Objects.requireNonNullElse(item.title(), ""),
-                            Objects.requireNonNullElse(item.url(), ""), Objects.requireNonNullElse(item.content(), "")))
-                    .toList();
-        } catch (Exception e) {
-            log.warn("Web search query failed for '{}': {}", query, e.getMessage());
+        String searchUrl = properties.baseUrl() + "/search";
+        URI searchUri = UriComponentsBuilder.fromUriString(searchUrl).queryParam("q", query.trim())
+                .queryParam("format", "json").build().toUri();
+        SearxngResponse response = restClient.get().uri(searchUri).accept(MediaType.APPLICATION_JSON).retrieve()
+                .body(SearxngResponse.class);
+        if (response == null || response.results() == null) {
             return List.of();
         }
+        return response.results().stream().limit(MAX_RESULTS).map(WebSearchTools::toSearchResult).toList();
+    }
+
+    private static SearchResult toSearchResult(SearxngItem item) {
+        String title = Objects.requireNonNullElse(item.title(), "");
+        String url = Objects.requireNonNullElse(item.url(), "");
+        String snippet = Objects.requireNonNullElse(item.content(), "");
+        return new SearchResult(title, url, snippet);
     }
 
     String formatResults(String query) {
-        List<SearchResult> results = searchWeb(query);
-        if (results.isEmpty()) {
-            return "No web search results found for query: " + Objects.requireNonNullElse(query, "");
+        if (query == null || query.isBlank()) {
+            return "Error: Search query must not be blank.";
         }
-        StringBuilder text = new StringBuilder("Web Search Results for '").append(query).append("':\n\n");
+        String trimmed = query.trim();
+        List<SearchResult> results;
+        try {
+            results = searchWeb(trimmed);
+        } catch (RuntimeException e) {
+            log.warn("Web search query failed for '{}': {}", trimmed, e.getMessage());
+            return UNAVAILABLE;
+        }
+        if (results.isEmpty()) {
+            return "No web search results found for query: " + trimmed;
+        }
+        StringBuilder text = new StringBuilder("Web Search Results for '").append(trimmed).append("':\n\n");
         for (int i = 0; i < results.size(); i++) {
             SearchResult result = results.get(i);
             text.append(i + 1).append(". ").append(result.title()).append("\n").append("   URL: ").append(result.url())

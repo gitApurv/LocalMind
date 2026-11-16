@@ -11,7 +11,8 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Component;
 
 /**
- * Keeps the newest history that fits a token budget, preferring whole user/assistant pairs.
+ * Keeps the newest history that fits a token budget, preferring whole user/assistant pairs. User messages that never
+ * got a reply are left out.
  */
 @Component
 @RequiredArgsConstructor
@@ -20,12 +21,14 @@ public class HistoryTrimmer {
     private final TokenCounter tokenCounter;
     private final ToolNoteRenderer toolNoteRenderer;
 
-    public TrimmedHistory trimToBudget(List<ChatMessage> history, int budgetTokens) {
-        if (history == null || history.isEmpty()) {
+    public TrimmedHistory trimToBudget(List<ChatMessage> loadedHistory, int budgetTokens) {
+        List<ChatMessage> history = withoutUnansweredPrompts(loadedHistory);
+        if (history.isEmpty()) {
             return TrimmedHistory.empty();
         }
         if (budgetTokens <= 0) {
-            return new TrimmedHistory(List.of(), List.copyOf(history));
+            List<ChatMessage> dropped = List.copyOf(history);
+            return new TrimmedHistory(List.of(), dropped);
         }
 
         List<Message> converted = new ArrayList<>();
@@ -36,12 +39,16 @@ public class HistoryTrimmer {
             if (isAssistantReplyToUser(history, i)) {
                 ChatMessage userMessage = history.get(i - 1);
                 String assistantText = withToolNote(current);
-                int pairTokens = tokenCounter.estimate(userMessage.getContent()) + tokenCounter.estimate(assistantText);
+                int userTokens = tokenCounter.estimate(userMessage.getContent());
+                int assistantTokens = tokenCounter.estimate(assistantText);
+                int pairTokens = userTokens + assistantTokens;
                 if (tokensUsed + pairTokens > budgetTokens && !converted.isEmpty()) {
                     break;
                 }
-                converted.addFirst(new AssistantMessage(assistantText));
-                converted.addFirst(new UserMessage(userMessage.getContent()));
+                Message assistantReply = new AssistantMessage(assistantText);
+                Message userTurn = new UserMessage(userMessage.getContent());
+                converted.addFirst(assistantReply);
+                converted.addFirst(userTurn);
                 tokensUsed += pairTokens;
                 i -= 2;
             } else {
@@ -55,7 +62,28 @@ public class HistoryTrimmer {
             }
         }
         // Everything at or before index i did not fit.
-        return new TrimmedHistory(converted, List.copyOf(history.subList(0, i + 1)));
+        List<ChatMessage> dropped = List.copyOf(history.subList(0, i + 1));
+        return new TrimmedHistory(converted, dropped);
+    }
+
+    /**
+     * Drops user messages not directly followed by an assistant reply. The user message is saved before its turn
+     * streams, so a turn that failed, was stopped before any output, or was cut off by a restart leaves it unanswered;
+     * replaying it would show the model two user turns in a row, often the same question twice.
+     */
+    private static List<ChatMessage> withoutUnansweredPrompts(List<ChatMessage> history) {
+        if (history == null) {
+            return List.of();
+        }
+        List<ChatMessage> answered = new ArrayList<>(history.size());
+        for (int i = 0; i < history.size(); i++) {
+            ChatMessage message = history.get(i);
+            boolean repliedTo = i + 1 < history.size() && history.get(i + 1).getRole() == ChatMessage.Role.ASSISTANT;
+            if (message.getRole() != ChatMessage.Role.USER || repliedTo) {
+                answered.add(message);
+            }
+        }
+        return answered;
     }
 
     private static boolean isAssistantReplyToUser(List<ChatMessage> history, int index) {

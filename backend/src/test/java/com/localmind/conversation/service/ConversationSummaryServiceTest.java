@@ -5,7 +5,7 @@ import static org.mockito.Mockito.*;
 import com.localmind.conversation.entity.ChatMessage;
 import com.localmind.conversation.entity.Conversation;
 import com.localmind.conversation.repository.ConversationRepository;
-import com.localmind.llm.config.LlmProperties;
+import com.localmind.support.TestProperties;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -19,7 +19,7 @@ class ConversationSummaryServiceTest {
     private final ChatModel chatModel = mock(ChatModel.class);
     private final ConversationRepository conversationRepository = mock(ConversationRepository.class);
     private final ConversationSummaryService service = new ConversationSummaryService(chatModel, conversationRepository,
-            LlmProperties.defaults());
+            TestProperties.llmDefaults());
 
     @Test
     void updatesConversationWithGeneratedSummary() {
@@ -49,5 +49,18 @@ class ConversationSummaryServiceTest {
 
         verifyNoInteractions(chatModel);
         verify(conversationRepository, never()).updateSummary(any(), any(), any());
+    }
+
+    @Test
+    void doesNotStoreASummaryWithoutAWatermark() {
+        Conversation conv = Conversation.builder().id("c1").userId("u1").build();
+        when(conversationRepository.findById("c1")).thenReturn(Optional.of(conv));
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(
+                new Generation(new org.springframework.ai.chat.messages.AssistantMessage("Some summary.")))));
+        ChatMessage undated = ChatMessage.builder().role(ChatMessage.Role.USER).content("No timestamp").build();
+
+        service.summarizeDroppedTurnsAsync("c1", List.of(undated), "gemma3:1b");
+
+        verify(conversationRepository, org.mockito.Mockito.never()).updateSummary(any(), any(), any());
     }
 }

@@ -158,24 +158,20 @@ class ConversationControllerTest {
         Conversation convA = conversationRepository
                 .save(Conversation.builder().userId(userA.getId()).title("User A Private Chat").build());
 
-        // User B attempts to fetch messages
         mockMvc.perform(get("/api/conversations/" + convA.getId() + "/messages")
                 .with(jwt().jwt(jwt -> jwt.subject(userB.getId()).claim("email", userB.getEmail()))))
                 .andExpect(status().isForbidden());
 
-        // User B attempts to patch
         UpdateConversationRequest patchReq = new UpdateConversationRequest("Hacked Title", true, null);
         mockMvc.perform(patch("/api/conversations/" + convA.getId())
                 .with(jwt().jwt(jwt -> jwt.subject(userB.getId()).claim("email", userB.getEmail())))
                 .contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(patchReq)))
                 .andExpect(status().isForbidden());
 
-        // User B attempts to delete
         mockMvc.perform(delete("/api/conversations/" + convA.getId())
                 .with(jwt().jwt(jwt -> jwt.subject(userB.getId()).claim("email", userB.getEmail()))))
                 .andExpect(status().isForbidden());
 
-        // Verify conversation still exists untouched
         assertTrue(conversationRepository.existsById(convA.getId()));
     }
 }

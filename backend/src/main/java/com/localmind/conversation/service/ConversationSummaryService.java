@@ -57,15 +57,25 @@ public class ConversationSummaryService {
 
     private void summarize(Conversation conversation, List<ChatMessage> newTurns, String modelName) {
         try {
-            Prompt prompt = new Prompt(INSTRUCTION + buildTranscript(conversation, newTurns),
-                    OllamaChatOptions.builder().model(llmProperties.resolveModel(modelName)).build());
-            String summary = extractText(chatModel.call(prompt));
+            String transcript = buildTranscript(conversation, newTurns);
+            String resolvedModel = llmProperties.resolveModel(modelName);
+            OllamaChatOptions options = OllamaChatOptions.builder().model(resolvedModel).build();
+            Prompt prompt = new Prompt(INSTRUCTION + transcript, options);
+            ChatResponse response = chatModel.call(prompt);
+            String summary = extractText(response);
             if (summary == null || summary.isBlank()) {
                 return;
             }
-            conversationRepository.updateSummary(conversation.getId(), ThinkTags.strip(summary),
-                    newTurns.getLast().getCreatedAt());
-            log.info("Updated rolling summary for conversation '{}'", conversation.getId());
+            String cleanSummary = ThinkTags.strip(summary);
+            Instant summarizedThrough = newTurns.getLast().getCreatedAt();
+            if (cleanSummary.isBlank() || summarizedThrough == null) {
+                return;
+            }
+            int updated = conversationRepository.updateSummary(conversation.getId(), cleanSummary,
+                    summarizedThrough);
+            if (updated > 0) {
+                log.info("Updated rolling summary for conversation '{}'", conversation.getId());
+            }
         } catch (Exception e) {
             log.warn("Failed to summarize dropped turns for conversation '{}': {}", conversation.getId(),
                     e.getMessage());

@@ -33,7 +33,7 @@ public class PromptStatsAdvisor implements PromptAdvisor {
     }
 
     @Override
-    public ChatClientRequest before(ChatClientRequest request, AdvisorChain chain) {
+    public ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain) {
         if (!enabled || request == null || request.prompt() == null) {
             return request;
         }

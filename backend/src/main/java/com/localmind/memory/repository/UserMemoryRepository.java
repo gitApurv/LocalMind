@@ -11,5 +11,7 @@ public interface UserMemoryRepository extends JpaRepository<UserMemory, String> 
 
     List<UserMemory> findByUserIdAndPinnedTrue(String userId);
 
+    boolean existsByUserIdAndMemoryFact(String userId, String memoryFact);
+
     Optional<UserMemory> findByIdAndUserId(String id, String userId);
 }

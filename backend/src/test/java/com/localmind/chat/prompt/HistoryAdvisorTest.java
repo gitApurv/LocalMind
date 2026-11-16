@@ -3,12 +3,12 @@ package com.localmind.chat.prompt;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import com.localmind.chat.config.PromptProperties;
 import com.localmind.conversation.entity.ChatMessage;
 import com.localmind.conversation.entity.Conversation;
 import com.localmind.conversation.repository.ChatMessageRepository;
 import com.localmind.conversation.repository.ConversationRepository;
 import com.localmind.conversation.service.ConversationSummaryService;
+import com.localmind.support.TestProperties;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -28,7 +28,7 @@ class HistoryAdvisorTest {
     private final HistoryTrimmer historyTrimmer = new HistoryTrimmer(tokenCounter, toolNoteRenderer);
     private final ConversationSummaryService summaryService = mock(ConversationSummaryService.class);
     private final HistoryAdvisor advisor = new HistoryAdvisor(chatMessageRepository, conversationRepository,
-            historyTrimmer, summaryService, PromptProperties.defaults());
+            historyTrimmer, summaryService, TestProperties.promptDefaults());
 
     @Test
     void prependsSummaryWhenConversationHasSummary() {
@@ -74,14 +74,45 @@ class HistoryAdvisorTest {
     void sendsTurnsThatDoNotFitToTheSummaryService() {
         when(conversationRepository.findById("c1")).thenReturn(Optional.empty());
         ChatMessage old = ChatMessage.builder().role(ChatMessage.Role.USER).content("x".repeat(40_000)).build();
+        ChatMessage oldReply = ChatMessage.builder().role(ChatMessage.Role.ASSISTANT).content("Long answer").build();
         ChatMessage recent = ChatMessage.builder().role(ChatMessage.Role.USER).content("Recent").build();
+        ChatMessage recentReply = ChatMessage.builder().role(ChatMessage.Role.ASSISTANT).content("Reply").build();
         when(chatMessageRepository.findByConversationIdAndIdNotOrderByCreatedAtAsc("c1", "current"))
-                .thenReturn(List.of(old, recent));
+                .thenReturn(List.of(old, oldReply, recent, recentReply));
 
         ChatClientRequest request = ChatClientRequest.builder().prompt(new Prompt(new UserMessage("Now")))
                 .context(Map.of("conversationId", "c1", "currentMessageId", "current")).build();
         advisor.before(request, mock(AdvisorChain.class));
 
-        verify(summaryService).summarizeDroppedTurnsAsync(eq("c1"), eq(List.of(old)), any());
+        verify(summaryService).summarizeDroppedTurnsAsync(eq("c1"), eq(List.of(old, oldReply)), any());
+    }
+
+    @Test
+    void returnsRequestUnchangedWhenHistoryCannotBeLoaded() {
+        when(chatMessageRepository.findByConversationIdAndIdNotOrderByCreatedAtAsc("c1", "current"))
+                .thenThrow(new IllegalStateException("database unavailable"));
+        ChatClientRequest request = ChatClientRequest.builder().prompt(new Prompt(new UserMessage("Now")))
+                .context(Map.of("conversationId", "c1", "currentMessageId", "current")).build();
+
+        assertSame(request, advisor.before(request, mock(AdvisorChain.class)));
+    }
+
+    @Test
+    void keepsTrimmedHistoryWhenSummaryJobCannotStart() {
+        when(conversationRepository.findById("c1")).thenReturn(Optional.empty());
+        ChatMessage old = ChatMessage.builder().role(ChatMessage.Role.USER).content("x".repeat(40_000)).build();
+        ChatMessage oldReply = ChatMessage.builder().role(ChatMessage.Role.ASSISTANT).content("Long answer").build();
+        ChatMessage recent = ChatMessage.builder().role(ChatMessage.Role.USER).content("Recent").build();
+        ChatMessage recentReply = ChatMessage.builder().role(ChatMessage.Role.ASSISTANT).content("Reply").build();
+        when(chatMessageRepository.findByConversationIdAndIdNotOrderByCreatedAtAsc("c1", "current"))
+                .thenReturn(List.of(old, oldReply, recent, recentReply));
+        doThrow(new IllegalStateException("executor shut down")).when(summaryService)
+                .summarizeDroppedTurnsAsync(any(), any(), any());
+        ChatClientRequest request = ChatClientRequest.builder().prompt(new Prompt(new UserMessage("Now")))
+                .context(Map.of("conversationId", "c1", "currentMessageId", "current")).build();
+
+        ChatClientRequest result = advisor.before(request, mock(AdvisorChain.class));
+
+        assertTrue(result.prompt().getInstructions().stream().anyMatch(m -> "Recent".equals(m.getText())));
     }
 }

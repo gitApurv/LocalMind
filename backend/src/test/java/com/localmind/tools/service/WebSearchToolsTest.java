@@ -70,15 +70,25 @@ class WebSearchToolsTest {
     }
 
     @Test
-    @DisplayName("searchWeb() when SearXNG returns server error should return empty list gracefully")
+    @DisplayName("formatResults() should report an unreachable SearXNG instead of claiming there were no results")
     void searchWebServerErrorHandled() {
         mockServer.expect(requestTo("http://localhost:8081/search?q=error%20test&format=json"))
                 .andExpect(method(HttpMethod.GET)).andRespond(withServerError());
 
-        List<WebSearchTools.SearchResult> results = webSearchTools.searchWeb("error test");
+        String result = webSearchTools.formatResults("  error test  ");
         mockServer.verify();
 
-        assertTrue(results.isEmpty());
+        assertTrue(result.startsWith("Error: Web search is unavailable right now."));
+        assertFalse(result.contains("No web search results"));
+    }
+
+    @Test
+    @DisplayName("formatResults() should use the trimmed query when nothing is found")
+    void noResultsUsesTrimmedQuery() {
+        mockServer.expect(requestTo("http://localhost:8081/search?q=nothing&format=json"))
+                .andRespond(withSuccess("{\"results\": []}", MediaType.APPLICATION_JSON));
+
+        assertEquals("No web search results found for query: nothing", webSearchTools.formatResults("  nothing  "));
     }
 
     @Test

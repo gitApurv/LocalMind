@@ -24,6 +24,8 @@ class MonitoredToolCallback implements ToolCallback {
     private static final String LOOP_PROTECTION_MESSAGE = "Loop protection triggered: Maximum tool calls ("
             + MAX_TOOL_ITERATIONS + ") reached. Please provide the final response to the user now.";
     private static final int RESULT_SUMMARY_CHARS = 120;
+    /** Audit summary of a call that threw, so every recorded call has a result. */
+    static final String FAILED_SUMMARY = "failed";
 
     private final ToolCallback delegate;
     private final FluxSink<ChatEvent> sink;
@@ -69,7 +71,8 @@ class MonitoredToolCallback implements ToolCallback {
         }
 
         Map<String, Object> record = recordCall(toolName, toolInput);
-        sink.next(ChatEvent.toolStart(toolName));
+        ChatEvent startEvent = ChatEvent.toolStart(toolName);
+        sink.next(startEvent);
         try {
             String result = delegate.call(toolInput, toolContext);
             if (record != null) {
@@ -78,9 +81,13 @@ class MonitoredToolCallback implements ToolCallback {
             return result;
         } catch (Exception e) {
             log.warn("Tool invocation failed for '{}': {}", toolName, e.getMessage(), e);
+            if (record != null) {
+                record.put("resultSummary", FAILED_SUMMARY);
+            }
             return "Error executing tool (" + toolName + "). Continue without its result.";
         } finally {
-            sink.next(ChatEvent.toolEnd(toolName));
+            ChatEvent endEvent = ChatEvent.toolEnd(toolName);
+            sink.next(endEvent);
         }
     }
 

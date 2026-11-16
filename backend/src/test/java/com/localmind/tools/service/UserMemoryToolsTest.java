@@ -193,4 +193,44 @@ class UserMemoryToolsTest {
         assertNotNull(response);
         assertTrue(response.contains("Birthday is in September"));
     }
+
+    @Test
+    @DisplayName("saveUserMemory() should reject facts longer than the limit without storing anything")
+    void saveUserMemoryRejectsOverlongFact() {
+        ToolContext context = new ToolContext(Map.of("userId", "user-42"));
+
+        String result = userMemoryTools.saveUserMemory("x".repeat(UserMemoryTools.MAX_FACT_LENGTH + 1), context);
+
+        assertTrue(result.startsWith("Error: Memory fact is too long"));
+        verify(userMemoryRepository, never()).save(any());
+        assertTrue(vectorStore.addedDocuments.isEmpty());
+    }
+
+    @Test
+    @DisplayName("saveUserMemory() should not store the same fact twice")
+    void saveUserMemorySkipsDuplicate() {
+        when(userMemoryRepository.existsByUserIdAndMemoryFact("user-42", "Likes tea")).thenReturn(true);
+
+        String result = userMemoryTools.saveUserMemory("  Likes tea ", new ToolContext(Map.of("userId", "user-42")));
+
+        assertEquals("Memory already saved: Likes tea", result);
+        verify(userMemoryRepository, never()).save(any());
+        assertTrue(vectorStore.addedDocuments.isEmpty());
+    }
+
+    @Test
+    @DisplayName("recallUserMemories() fallback should list only the newest memories when the vault is large")
+    void recallFallbackIsCapped() {
+        List<UserMemory> many = new ArrayList<>();
+        for (int i = 0; i < UserMemoryTools.MAX_LISTED_MEMORIES + 5; i++) {
+            many.add(UserMemory.builder().id("m" + i).userId("user-42").memoryFact("Fact " + i).build());
+        }
+        when(userMemoryRepository.findByUserIdOrderByCreatedAtDesc("user-42")).thenReturn(many);
+
+        String result = userMemoryTools.recallUserMemories(null, new ToolContext(Map.of("userId", "user-42")));
+
+        assertTrue(result.startsWith("Saved User Memories (newest 20 of 25):"));
+        assertTrue(result.contains("Fact 19"));
+        assertFalse(result.contains("Fact 20"));
+    }
 }

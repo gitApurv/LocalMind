@@ -42,16 +42,23 @@ public class ToolSelector {
         }
 
         List<ToolCallback> selected = new ArrayList<>();
-        addIfPresent(selected, dateTimeTools.toolCallback());
-        addIfPresent(selected, mathTools.toolCallback());
-        addIfPresent(selected, userMemoryTools.saveToolCallback());
-        addIfPresent(selected, userMemoryTools.recallToolCallback());
-        addIfPresent(selected, webSearchTools.toolCallback());
+        ToolCallback dateTime = dateTimeTools.toolCallback();
+        addIfPresent(selected, dateTime);
+        ToolCallback math = mathTools.toolCallback();
+        addIfPresent(selected, math);
+        ToolCallback saveMemory = userMemoryTools.saveToolCallback();
+        addIfPresent(selected, saveMemory);
+        ToolCallback recallMemory = userMemoryTools.recallToolCallback();
+        addIfPresent(selected, recallMemory);
+        ToolCallback webSearch = webSearchTools.toolCallback();
+        addIfPresent(selected, webSearch);
         if (containsUrl(message)) {
-            addIfPresent(selected, webScraperTools.toolCallback());
+            ToolCallback webScraper = webScraperTools.toolCallback();
+            addIfPresent(selected, webScraper);
         }
         if (hasReadyAttachments(conversationId)) {
-            addIfPresent(selected, documentSearchTools.toolCallback());
+            ToolCallback documentSearch = documentSearchTools.toolCallback();
+            addIfPresent(selected, documentSearch);
         }
         return selected;
     }

@@ -17,6 +17,7 @@ import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Component;
 
@@ -54,7 +55,7 @@ public class HistoryAdvisor implements PromptAdvisor {
     }
 
     @Override
-    public ChatClientRequest before(ChatClientRequest request, AdvisorChain chain) {
+    public ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain) {
         if (!enabled || request == null || request.context() == null) {
             return request;
         }
@@ -64,12 +65,12 @@ public class HistoryAdvisor implements PromptAdvisor {
         }
 
         ModelProfile profile = PromptAdvisor.modelProfile(request);
-        TrimmedHistory history = historyTrimmer.trimToBudget(
-                loadHistory(conversationId, PromptAdvisor.contextString(request, ChatContextKeys.CURRENT_MESSAGE_ID)),
-                profile != null ? profile.historyBudget() : DEFAULT_HISTORY_BUDGET);
+        String currentMessageId = PromptAdvisor.contextString(request, ChatContextKeys.CURRENT_MESSAGE_ID);
+        List<ChatMessage> loaded = loadHistory(conversationId, currentMessageId);
+        int historyBudget = profile != null ? profile.historyBudget() : DEFAULT_HISTORY_BUDGET;
+        TrimmedHistory history = historyTrimmer.trimToBudget(loaded, historyBudget);
         if (!history.dropped().isEmpty()) {
-            conversationSummaryService.summarizeDroppedTurnsAsync(conversationId, history.dropped(),
-                    profile != null ? profile.modelName() : null);
+            summarizeDropped(conversationId, history, profile);
         }
         Optional<Message> summary = summaryMessage(conversationId);
         if (history.messages().isEmpty() && summary.isEmpty()) {
@@ -86,7 +87,19 @@ public class HistoryAdvisor implements PromptAdvisor {
         summary.ifPresent(messages::add);
         messages.addAll(history.messages());
         instructions.stream().filter(message -> !isSystem(message)).forEach(messages::add);
-        return request.mutate().prompt(new Prompt(messages, prompt != null ? prompt.getOptions() : null)).build();
+        ChatOptions options = prompt != null ? prompt.getOptions() : null;
+        Prompt historyPrompt = new Prompt(messages, options);
+        return request.mutate().prompt(historyPrompt).build();
+    }
+
+    /** Summarising is best-effort: if the job cannot be started, the trimmed history is still sent. */
+    private void summarizeDropped(String conversationId, TrimmedHistory history, ModelProfile profile) {
+        String modelName = profile != null ? profile.modelName() : null;
+        try {
+            conversationSummaryService.summarizeDroppedTurnsAsync(conversationId, history.dropped(), modelName);
+        } catch (RuntimeException e) {
+            log.warn("Could not start summarising dropped turns of conversation '{}'", conversationId, e);
+        }
     }
 
     private static boolean isSystem(Message message) {
@@ -94,18 +107,23 @@ public class HistoryAdvisor implements PromptAdvisor {
     }
 
     private List<ChatMessage> loadHistory(String conversationId, String currentMessageId) {
-        return currentMessageId != null
-                ? chatMessageRepository.findByConversationIdAndIdNotOrderByCreatedAtAsc(conversationId,
-                        currentMessageId)
-                : chatMessageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+        if (currentMessageId == null) {
+            return chatMessageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+        }
+        return chatMessageRepository.findByConversationIdAndIdNotOrderByCreatedAtAsc(conversationId,
+                currentMessageId);
+    }
+
+    private static Message toSummaryMessage(Conversation conversation) {
+        String summaryText = "<summary>\n" + conversation.getSummary().trim() + "\n</summary>";
+        return new SystemMessage(summaryText);
     }
 
     /** The summary is best-effort: a lookup failure must not block the chat. */
     private Optional<Message> summaryMessage(String conversationId) {
         try {
             return conversationRepository.findById(conversationId).filter(Conversation::hasSummary)
-                    .map(conversation -> new SystemMessage(
-                            "<summary>\n" + conversation.getSummary().trim() + "\n</summary>"));
+                    .map(HistoryAdvisor::toSummaryMessage);
         } catch (Exception e) {
             log.debug("Could not load summary for conversation '{}': {}", conversationId, e.getMessage());
             return Optional.empty();

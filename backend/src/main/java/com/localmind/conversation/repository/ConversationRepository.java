@@ -33,8 +33,14 @@ public interface ConversationRepository extends JpaRepository<Conversation, Stri
     int replacePlaceholderTitle(@Param("id") String id, @Param("title") String title,
             @Param("placeholder") String placeholder, @Param("now") Instant now);
 
+    /**
+     * Stores a summary only if it covers turns newer than the stored one, so a slower job that started earlier can
+     * never overwrite a newer summary or move the watermark backwards.
+     */
     @Transactional
     @Modifying
-    @Query("UPDATE Conversation c SET c.summary = :summary, c.summarizedThrough = :through WHERE c.id = :id")
+    @Query("""
+            UPDATE Conversation c SET c.summary = :summary, c.summarizedThrough = :through
+            WHERE c.id = :id AND (c.summarizedThrough IS NULL OR c.summarizedThrough < :through)""")
     int updateSummary(@Param("id") String id, @Param("summary") String summary, @Param("through") Instant through);
 }

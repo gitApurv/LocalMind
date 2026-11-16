@@ -11,7 +11,6 @@ import com.localmind.conversation.entity.Conversation;
 import com.localmind.conversation.repository.ChatMessageRepository;
 import com.localmind.conversation.repository.ConversationRepository;
 import com.localmind.llm.config.LlmProperties;
-import com.localmind.llm.service.ModelCatalogService;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -26,7 +25,6 @@ public class ConversationService {
     private final AttachmentService attachmentService;
     private final OwnershipGuard ownershipGuard;
     private final LlmProperties llmProperties;
-    private final ModelCatalogService modelCatalogService;
 
     @Transactional
     public ConversationResponse createConversation(String userId, CreateConversationRequest request) {
@@ -34,12 +32,10 @@ public class ConversationService {
                 ? request.title().trim()
                 : Conversation.DEFAULT_TITLE;
         String modelName = llmProperties.resolveModel(request != null ? request.modelName() : null);
-        if (modelName == null || modelName.isBlank()) {
-            modelName = modelCatalogService.getDefaultModel();
-        }
 
         Conversation conversation = Conversation.builder().userId(userId).title(title).modelName(modelName).build();
-        return ConversationResponse.from(conversationRepository.save(conversation));
+        Conversation saved = conversationRepository.save(conversation);
+        return ConversationResponse.from(saved);
     }
 
     @Transactional(readOnly = true)
@@ -67,7 +63,8 @@ public class ConversationService {
         if (request.modelName() != null && !request.modelName().isBlank()) {
             conversation.setModelName(request.modelName().trim());
         }
-        return ConversationResponse.from(conversationRepository.saveAndFlush(conversation));
+        Conversation saved = conversationRepository.saveAndFlush(conversation);
+        return ConversationResponse.from(saved);
     }
 
     @Transactional

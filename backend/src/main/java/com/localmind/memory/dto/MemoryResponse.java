@@ -6,7 +6,7 @@ import java.time.Instant;
 public record MemoryResponse(String id, String memoryFact, boolean pinned, Instant createdAt) {
 
     public static MemoryResponse from(UserMemory memory) {
-        return new MemoryResponse(memory.getId(), memory.getMemoryFact(), Boolean.TRUE.equals(memory.getPinned()),
-                memory.getCreatedAt());
+        boolean pinned = Boolean.TRUE.equals(memory.getPinned());
+        return new MemoryResponse(memory.getId(), memory.getMemoryFact(), pinned, memory.getCreatedAt());
     }
 }

@@ -5,7 +5,7 @@ import static org.mockito.Mockito.*;
 
 import com.localmind.conversation.entity.Conversation;
 import com.localmind.conversation.repository.ConversationRepository;
-import com.localmind.llm.config.LlmProperties;
+import com.localmind.support.TestProperties;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -50,7 +50,7 @@ class AutoTitleServiceTest {
     @BeforeEach
     void setUp() {
         chatModel = new TestChatModel();
-        autoTitleService = new AutoTitleService(chatModel, conversationRepository, LlmProperties.defaults());
+        autoTitleService = new AutoTitleService(chatModel, conversationRepository, TestProperties.llmDefaults());
     }
 
     @Test
@@ -97,5 +97,13 @@ class AutoTitleServiceTest {
 
         assertEquals("Existing Thread Name", conv.getTitle());
         verify(conversationRepository, never()).replacePlaceholderTitle(any(), any(), any(), any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {"Don't Panic Guide | Don't Panic Guide",
+            "'Quoted Title' | Quoted Title", "\"Double Quoted\" | Double Quoted", "**Title:** Bold Title | Bold Title",
+            "\u2018Curly Quoted\u2019 | Curly Quoted"})
+    void cleanTitleKeepsApostrophesButDropsWrappingQuotes(String raw, String expected) {
+        assertEquals(expected, AutoTitleService.cleanTitle(raw));
     }
 }

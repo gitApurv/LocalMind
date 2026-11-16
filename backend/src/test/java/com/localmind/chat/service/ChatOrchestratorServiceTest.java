@@ -27,10 +27,10 @@ import com.localmind.conversation.repository.ConversationRepository;
 import com.localmind.conversation.service.AutoTitleService;
 import com.localmind.conversation.service.ConversationSummaryService;
 import com.localmind.conversation.service.OwnershipGuard;
-import com.localmind.llm.config.LlmProperties;
 import com.localmind.llm.service.ModelProfileRegistry;
 import com.localmind.memory.repository.UserMemoryRepository;
 import com.localmind.support.OfflineModelCatalog;
+import com.localmind.support.TestProperties;
 import com.localmind.tools.config.SearxngProperties;
 import com.localmind.tools.config.WebScraperProperties;
 import com.localmind.tools.service.DateTimeTools;
@@ -119,7 +119,7 @@ class ChatOrchestratorServiceTest {
         String lastModelName;
 
         public TestAutoTitleService() {
-            super(null, null, LlmProperties.defaults());
+            super(null, null, TestProperties.llmDefaults());
         }
 
         @Override
@@ -169,7 +169,7 @@ class ChatOrchestratorServiceTest {
 
         TokenCounter tokenCounter = new CharacterTokenCounter();
         HistoryTrimmer historyTrimmer = new HistoryTrimmer(tokenCounter, new ToolNoteRenderer(new ObjectMapper()));
-        PromptProperties promptProperties = PromptProperties.defaults();
+        PromptProperties promptProperties = TestProperties.promptDefaults();
         PromptProperties ragDisabled = new PromptProperties(new PromptProperties.Rag(false), null, null, null);
 
         List<PromptAdvisor> advisors = List.of(new PromptStructureAdvisor(userRepository, userMemoryRepository),
@@ -184,7 +184,7 @@ class ChatOrchestratorServiceTest {
                 mathTools, webSearchTools, webScraperTools, userMemoryTools, documentSearchTools);
 
         chatOrchestratorService = new ChatOrchestratorService(chatModel, chatMessageRepository, conversationRepository,
-                ownershipGuard, autoTitleService, advisors, toolSelector, registry, LlmProperties.defaults(),
+                ownershipGuard, autoTitleService, advisors, toolSelector, registry, TestProperties.llmDefaults(),
                 tokenCounter, new ObjectMapper());
     }
 
@@ -215,7 +215,6 @@ class ChatOrchestratorServiceTest {
                         e -> e.type() == ChatEvent.EventType.CONTENT && "How can I help you?".equals(e.content()))
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.DONE && e.messageId() != null).verifyComplete();
 
-        // Verify user and assistant messages saved
         ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
         verify(chatMessageRepository, times(2)).save(captor.capture());
         List<ChatMessage> savedMessages = captor.getAllValues();
@@ -235,6 +234,30 @@ class ChatOrchestratorServiceTest {
 
         assertEquals(conversationId, autoTitleService.lastConversationId);
         assertEquals("Hi there", autoTitleService.lastFirstPrompt);
+    }
+
+    @Test
+    @DisplayName("streamChat() should answer normally when prompt advisors fail to load user data or history")
+    void streamChatSurvivesFailingAdvisors() {
+        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(true);
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(userRepository.findById(userId)).thenThrow(new IllegalStateException("database unavailable"));
+        when(chatMessageRepository.findByConversationIdAndIdNotOrderByCreatedAtAsc(eq(conversationId), any()))
+                .thenThrow(new IllegalStateException("database unavailable"));
+        chatModel.streamResponses = Flux
+                .just(new ChatResponse(List.of(new Generation(new AssistantMessage("Still here.")))));
+        when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> {
+            ChatMessage msg = invocation.getArgument(0);
+            return ChatMessage.builder().id("msg-" + System.nanoTime()).conversationId(msg.getConversationId())
+                    .role(msg.getRole()).content(msg.getContent()).createdAt(Instant.now()).build();
+        });
+
+        Flux<ChatEvent> eventFlux = chatOrchestratorService
+                .streamChat(new ChatRequest(conversationId, "Hi there", null, false, null), userId);
+
+        StepVerifier.create(eventFlux)
+                .expectNextMatches(e -> e.type() == ChatEvent.EventType.CONTENT && "Still here.".equals(e.content()))
+                .expectNextMatches(e -> e.type() == ChatEvent.EventType.DONE).verifyComplete();
     }
 
     @Test
@@ -337,7 +360,7 @@ class ChatOrchestratorServiceTest {
                 .role(ChatMessage.Role.ASSISTANT).content("Paris is the capital of France.")
                 .createdAt(Instant.now().minusSeconds(30)).build();
 
-        // History includes prior messages
+        // History includes prior messages.
         when(chatMessageRepository.findByConversationIdAndIdNotOrderByCreatedAtAsc(eq(conversationId), any()))
                 .thenReturn(List.of(prevUser, prevAssistant));
 
@@ -475,13 +498,13 @@ class ChatOrchestratorServiceTest {
 
             ToolCallback wrapped = new MonitoredToolCallback(mockCallback, sink, counter, null);
 
-            // Execute 5 times (allowed)
+            // Execute 5 times (allowed).
             for (int i = 0; i < 5; i++) {
                 String res = wrapped.call("{}");
                 assertTrue(res.contains("result"));
             }
 
-            // 6th execution should trigger loop protection
+            // 6th execution should trigger loop protection.
             String blocked = wrapped.call("{}");
             assertTrue(blocked.contains("Loop protection triggered"));
 
@@ -489,7 +512,7 @@ class ChatOrchestratorServiceTest {
         });
 
         StepVerifier.create(flux)
-                // 5 iterations * 2 events = 10 events (TOOL_START, TOOL_END)
+                // 5 iterations * 2 events = 10 events (TOOL_START, TOOL_END).
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.TOOL_START && "testTool".equals(e.tool()))
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.TOOL_END && "testTool".equals(e.tool()))
                 .expectNextCount(8).verifyComplete();
@@ -557,7 +580,7 @@ class ChatOrchestratorServiceTest {
                     .createdAt(Instant.now()).build();
         });
 
-        // toolsEnabled is explicitly true, but conversation.modelName is "gemma3:1b"
+        // toolsEnabled is explicitly true, but conversation.modelName is "gemma3:1b".
         ChatRequest request = new ChatRequest(conversationId, "Calculate 2+2", null, true, null);
 
         StepVerifier.create(chatOrchestratorService.streamChat(request, userId))

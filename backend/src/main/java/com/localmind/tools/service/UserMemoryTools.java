@@ -18,6 +18,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.stereotype.Component;
 
 /**
@@ -38,6 +39,10 @@ public class UserMemoryTools {
     private static final String MISSING_USER = "Error: Security context missing authenticated user ID.";
     private static final int RECALL_TOP_K = 5;
     private static final double RECALL_SIMILARITY_THRESHOLD = 0.3;
+    /** A memory is one short fact; longer text belongs in a document upload. */
+    static final int MAX_FACT_LENGTH = 1000;
+    /** Cap for the list-everything fallback, so a large vault cannot flood the prompt. */
+    static final int MAX_LISTED_MEMORIES = 20;
 
     private final UserMemoryRepository userMemoryRepository;
     private final VectorStore vectorStore;
@@ -59,9 +64,17 @@ public class UserMemoryTools {
         }
 
         String trimmedFact = fact.trim();
+        if (trimmedFact.length() > MAX_FACT_LENGTH) {
+            return "Error: Memory fact is too long (more than " + MAX_FACT_LENGTH
+                    + " characters). Save a shorter summary of the fact.";
+        }
         try {
+            if (userMemoryRepository.existsByUserIdAndMemoryFact(userId, trimmedFact)) {
+                return "Memory already saved: " + trimmedFact;
+            }
             String memoryId = UUID.randomUUID().toString();
-            userMemoryRepository.save(UserMemory.builder().id(memoryId).userId(userId).memoryFact(trimmedFact).build());
+            UserMemory memory = UserMemory.builder().id(memoryId).userId(userId).memoryFact(trimmedFact).build();
+            userMemoryRepository.save(memory);
             indexMemory(memoryId, userId, trimmedFact);
             log.info("Saved user memory '{}' for user '{}'", memoryId, userId);
             return "Memory saved successfully: " + trimmedFact;
@@ -71,9 +84,7 @@ public class UserMemoryTools {
         }
     }
 
-    /**
-     * Semantic search first; falls back to listing every stored memory.
-     */
+    /** Semantic search first; falls back to listing the newest {@link #MAX_LISTED_MEMORIES} stored memories. */
     public String recallUserMemories(String query, ToolContext toolContext) {
         String userId = ToolContexts.get(toolContext, ChatContextKeys.USER_ID);
         if (userId == null) {
@@ -85,15 +96,19 @@ public class UserMemoryTools {
             if (query != null && !query.isBlank()) {
                 List<Document> matches = searchMemories(userId, query.trim());
                 if (!matches.isEmpty()) {
-                    return numberedList("Recalled User Memories for '" + query.trim() + "':", matches,
-                            Document::getText);
+                    String header = "Recalled User Memories for '" + query.trim() + "':";
+                    return numberedList(header, matches, Document::getText);
                 }
             }
             List<UserMemory> allMemories = userMemoryRepository.findByUserIdOrderByCreatedAtDesc(userId);
             if (allMemories == null || allMemories.isEmpty()) {
                 return "No saved user memories found.";
             }
-            return numberedList("Saved User Memories:", allMemories, UserMemory::getMemoryFact);
+            List<UserMemory> listed = allMemories.stream().limit(MAX_LISTED_MEMORIES).toList();
+            String header = listed.size() < allMemories.size()
+                    ? "Saved User Memories (newest " + listed.size() + " of " + allMemories.size() + "):"
+                    : "Saved User Memories:";
+            return numberedList(header, listed, UserMemory::getMemoryFact);
         } catch (Exception e) {
             log.error("Failed to recall memories for user '{}': {}", userId, e.getMessage(), e);
             return "Error: saved memories could not be recalled right now.";
@@ -103,8 +118,9 @@ public class UserMemoryTools {
     /** Keeps the database and the vector store consistent: the row is removed again if embedding fails. */
     private void indexMemory(String memoryId, String userId, String fact) {
         try {
-            vectorStore.add(List.of(new Document(fact, Map.of(VectorMetadata.USER_ID, userId, VectorMetadata.TYPE,
-                    VectorMetadata.TYPE_USER_MEMORY, VectorMetadata.MEMORY_ID, memoryId))));
+            Map<String, Object> metadata = Map.of(VectorMetadata.USER_ID, userId, VectorMetadata.TYPE,
+                    VectorMetadata.TYPE_USER_MEMORY, VectorMetadata.MEMORY_ID, memoryId);
+            vectorStore.add(List.of(new Document(fact, metadata)));
         } catch (RuntimeException e) {
             userMemoryRepository.deleteById(memoryId);
             throw e;
@@ -113,9 +129,10 @@ public class UserMemoryTools {
 
     private List<Document> searchMemories(String userId, String query) {
         try {
-            List<Document> matches = vectorStore.similaritySearch(SearchRequest.builder().query(query)
-                    .topK(RECALL_TOP_K).similarityThreshold(RECALL_SIMILARITY_THRESHOLD)
-                    .filterExpression(VectorFilters.userMemories(userId)).build());
+            Filter.Expression filter = VectorFilters.userMemories(userId);
+            SearchRequest searchRequest = SearchRequest.builder().query(query).topK(RECALL_TOP_K)
+                    .similarityThreshold(RECALL_SIMILARITY_THRESHOLD).filterExpression(filter).build();
+            List<Document> matches = vectorStore.similaritySearch(searchRequest);
             return matches != null ? matches : List.of();
         } catch (Exception e) {
             log.debug("Semantic memory search failed, falling back to relational database: {}", e.getMessage());

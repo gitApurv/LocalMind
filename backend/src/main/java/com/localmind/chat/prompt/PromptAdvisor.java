@@ -2,6 +2,7 @@ package com.localmind.chat.prompt;
 
 import com.localmind.common.ai.ChatContextKeys;
 import com.localmind.llm.model.ModelProfile;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
@@ -13,6 +14,25 @@ import org.springframework.ai.chat.messages.Message;
  * {@link #getOrder()} order. Advisors only transform the request; on failure they return it unchanged.
  */
 public interface PromptAdvisor extends BaseAdvisor {
+
+    /** This advisor's contribution to the prompt. May throw: {@link #before} turns any failure into a no-op. */
+    ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain);
+
+    /**
+     * Runs {@link #apply} and never throws into the LLM pipeline. Spring AI runs advisors inside the response stream,
+     * so an exception here would end the turn with a misleading "model stopped responding" error; a missing prompt part
+     * (memories, excerpts, history) is the better outcome.
+     */
+    @Override
+    default ChatClientRequest before(ChatClientRequest request, AdvisorChain chain) {
+        try {
+            return apply(request, chain);
+        } catch (RuntimeException e) {
+            LoggerFactory.getLogger(getClass()).warn("Prompt advisor '{}' failed; continuing without its contribution",
+                    getName(), e);
+            return request;
+        }
+    }
 
     @Override
     default ChatClientResponse after(ChatClientResponse response, AdvisorChain chain) {

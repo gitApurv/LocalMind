@@ -5,6 +5,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import java.time.Instant;
@@ -19,7 +20,9 @@ import lombok.Setter;
  * A persisted turn of a conversation. Named {@code ChatMessage} to avoid clashing with Spring AI's {@code Message}.
  */
 @Entity
-@Table(name = "messages")
+@Table(name = "messages", indexes = {
+        // Thread view, prompt history and conversation delete all filter by conversation, oldest first.
+        @Index(name = "idx_messages_conversation_created", columnList = "conversation_id, created_at")})
 @Getter
 @Setter
 @NoArgsConstructor

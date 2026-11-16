@@ -2,9 +2,7 @@ package com.localmind.chat.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
-/**
- * A server-sent event emitted while a chat response streams.
- */
+/** A server-sent event emitted while a chat response streams. */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ChatEvent(EventType type, String content, String tool, String messageId) {
 

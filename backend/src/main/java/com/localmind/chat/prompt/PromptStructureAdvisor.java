@@ -7,17 +7,21 @@ import com.localmind.user.repository.UserRepository;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Component;
 
 /**
  * Step 1: builds the system message from the base rules, the request's system prompt, the user's custom instructions
- * and pinned memories.
+ * and pinned memories. If the user's data cannot be loaded, the base rules and request system prompt are still sent:
+ * returning the request unchanged would drop the rule that document excerpts are data, not instructions.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class PromptStructureAdvisor implements PromptAdvisor {
@@ -37,12 +41,13 @@ public class PromptStructureAdvisor implements PromptAdvisor {
     }
 
     @Override
-    public ChatClientRequest before(ChatClientRequest request, AdvisorChain chain) {
+    public ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain) {
         if (request == null || request.context() == null) {
             return request;
         }
-        String systemText = buildSystemText(PromptAdvisor.contextString(request, ChatContextKeys.USER_ID),
-                PromptAdvisor.contextString(request, ChatContextKeys.REQUEST_SYSTEM_PROMPT));
+        String userId = PromptAdvisor.contextString(request, ChatContextKeys.USER_ID);
+        String requestSystemPrompt = PromptAdvisor.contextString(request, ChatContextKeys.REQUEST_SYSTEM_PROMPT);
+        String systemText = buildSystemText(userId, requestSystemPrompt);
 
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage(systemText));
@@ -50,7 +55,9 @@ public class PromptStructureAdvisor implements PromptAdvisor {
         if (prompt != null && prompt.getInstructions() != null) {
             messages.addAll(prompt.getInstructions());
         }
-        return request.mutate().prompt(new Prompt(messages, prompt != null ? prompt.getOptions() : null)).build();
+        ChatOptions options = prompt != null ? prompt.getOptions() : null;
+        Prompt structuredPrompt = new Prompt(messages, options);
+        return request.mutate().prompt(structuredPrompt).build();
     }
 
     private String buildSystemText(String userId, String requestSystemPrompt) {
@@ -66,17 +73,26 @@ public class PromptStructureAdvisor implements PromptAdvisor {
     }
 
     private void appendCustomInstructions(StringBuilder text, String userId) {
-        userRepository.findById(userId).map(user -> user.getCustomInstructions())
-                .filter(instructions -> instructions != null && !instructions.isBlank())
-                .ifPresent(instructions -> text.append("\n\nUser Custom Instructions:\n").append(instructions.trim()));
+        try {
+            userRepository.findById(userId).map(user -> user.getCustomInstructions())
+                    .filter(instructions -> instructions != null && !instructions.isBlank()).ifPresent(
+                            instructions -> text.append("\n\nUser Custom Instructions:\n").append(instructions.trim()));
+        } catch (RuntimeException e) {
+            log.warn("Could not load custom instructions of user '{}'; sending the prompt without them", userId, e);
+        }
     }
 
     private void appendPinnedMemories(StringBuilder text, String userId) {
-        List<UserMemory> pinned = userMemoryRepository.findByUserIdAndPinnedTrue(userId);
-        if (pinned == null || pinned.isEmpty()) {
-            return;
+        try {
+            List<UserMemory> pinned = userMemoryRepository.findByUserIdAndPinnedTrue(userId);
+            if (pinned == null || pinned.isEmpty()) {
+                return;
+            }
+            StringBuilder section = new StringBuilder("\n\nPinned User Preferences:\n");
+            pinned.forEach(memory -> section.append("- ").append(memory.getMemoryFact().trim()).append("\n"));
+            text.append(section);
+        } catch (RuntimeException e) {
+            log.warn("Could not load pinned memories of user '{}'; sending the prompt without them", userId, e);
         }
-        text.append("\n\nPinned User Preferences:\n");
-        pinned.forEach(memory -> text.append("- ").append(memory.getMemoryFact().trim()).append("\n"));
     }
 }

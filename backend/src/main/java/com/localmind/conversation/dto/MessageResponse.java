@@ -7,8 +7,8 @@ public record MessageResponse(String id, String conversationId, String role, Str
         String toolCalls, Integer tokenCount, Instant createdAt) {
 
     public static MessageResponse from(ChatMessage message) {
-        return new MessageResponse(message.getId(), message.getConversationId(),
-                message.getRole() != null ? message.getRole().name() : null, message.getContent(),
+        String role = message.getRole() != null ? message.getRole().name() : null;
+        return new MessageResponse(message.getId(), message.getConversationId(), role, message.getContent(),
                 message.getReasoningContent(), message.getToolCalls(), message.getTokenCount(), message.getCreatedAt());
     }
 }

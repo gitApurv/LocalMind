@@ -5,9 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Component;
 
-/**
- * IDOR guardrail: every conversation-scoped operation must call this before touching data.
- */
+/** IDOR guardrail: every conversation-scoped operation must call this before touching data. */
 @Component
 @RequiredArgsConstructor
 public class OwnershipGuard {

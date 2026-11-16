@@ -1,6 +1,10 @@
 spring:
   application:
     name: localmind
+  http:
+    clients:
+      imperative:
+        factory: reactor
   threads:
     virtual:
       enabled: true

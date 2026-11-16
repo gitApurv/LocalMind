@@ -67,26 +67,26 @@ public class ChatOrchestratorService {
                 () -> new ResourceNotFoundException("Conversation not found: " + request.conversationId()));
 
         String model = llmProperties.resolveModel(request.model(), conversation.getModelName());
+        ModelProfile profile = modelProfileRegistry.getProfile(model);
         ChatMessage userMessage = persistUserMessage(request);
-        ChatTurn turn = new ChatTurn(request, userId, conversation, model, modelProfileRegistry.getProfile(model),
-                userMessage);
+        ChatTurn turn = new ChatTurn(request, userId, conversation, model, profile, userMessage);
         return Flux.create(turn::start);
     }
 
     /** Saved before streaming so the prompt is never lost. */
     private ChatMessage persistUserMessage(ChatRequest request) {
         String content = request.message().trim();
-        return chatMessageRepository.save(ChatMessage.builder().conversationId(request.conversationId())
-                .role(ChatMessage.Role.USER).content(content).tokenCount(estimateTokens(content)).build());
+        int tokenCount = estimateTokens(content);
+        ChatMessage message = ChatMessage.builder().conversationId(request.conversationId())
+                .role(ChatMessage.Role.USER).content(content).tokenCount(tokenCount).build();
+        return chatMessageRepository.save(message);
     }
 
     private int estimateTokens(String text) {
         return Math.max(1, tokenCounter.estimate(text));
     }
 
-    /**
-     * State of a single streaming chat turn.
-     */
+    /** State of a single streaming chat turn. */
     private final class ChatTurn {
 
         private static final String TOOLS_UNSUPPORTED_MARKER = "does not support tools";
@@ -137,13 +137,14 @@ public class ChatOrchestratorService {
         }
 
         private ChatClient.ChatClientRequestSpec buildPrompt() {
-            ChatClient.ChatClientRequestSpec spec = ChatClient.builder(chatModel).build().prompt()
-                    .options(OllamaChatOptions.builder().model(model).numCtx(profile.numCtx())
-                            .numPredict(profile.outputReserve()))
-                    .advisors(new ArrayList<Advisor>(promptAdvisors))
-                    .advisors(advisor -> advisorParams().forEach(advisor::param));
+            OllamaChatOptions.Builder options = OllamaChatOptions.builder().model(model).numCtx(profile.numCtx())
+                    .numPredict(profile.outputReserve());
+            List<Advisor> advisors = new ArrayList<>(promptAdvisors);
+            String userText = request.message().trim();
+            ChatClient.ChatClientRequestSpec spec = ChatClient.builder(chatModel).build().prompt().options(options)
+                    .advisors(advisors).advisors(advisor -> advisorParams().forEach(advisor::param));
             registerTools(spec);
-            return spec.user(request.message().trim());
+            return spec.user(userText);
         }
 
         private Map<String, Object> advisorParams() {
@@ -172,8 +173,9 @@ public class ChatOrchestratorService {
             List<ToolCallback> monitored = tools.stream().<ToolCallback>map(
                     tool -> new MonitoredToolCallback(tool, sink, toolCallCounter, executedToolCalls)).toList();
             spec.tools(monitored);
-            spec.toolContext(
-                    Map.of(ChatContextKeys.USER_ID, userId, ChatContextKeys.CONVERSATION_ID, request.conversationId()));
+            Map<String, Object> toolContext = Map.of(ChatContextKeys.USER_ID, userId,
+                    ChatContextKeys.CONVERSATION_ID, request.conversationId());
+            spec.toolContext(toolContext);
         }
 
         private void onChunk(ChatResponse chunk) {
@@ -197,10 +199,13 @@ public class ChatOrchestratorService {
         private void onComplete() {
             try {
                 parser.flush(sink);
-                ChatMessage saved = chatMessageRepository.save(assistantMessage());
+                ChatMessage reply = assistantMessage();
+                ChatMessage saved = chatMessageRepository.save(reply);
                 // Only bump updatedAt: saving the entity loaded at stream start would undo concurrent edits.
-                conversationRepository.touch(conversation.getId(), Instant.now());
-                sink.next(ChatEvent.done(saved.getId()));
+                Instant now = Instant.now();
+                conversationRepository.touch(conversation.getId(), now);
+                ChatEvent doneEvent = ChatEvent.done(saved.getId());
+                sink.next(doneEvent);
                 autoTitleService.generateTitleAsync(request.conversationId(), request.message(), model);
             } catch (Exception e) {
                 log.error("Failed to persist message history for conversation '{}': {}", request.conversationId(),
@@ -216,7 +221,8 @@ public class ChatOrchestratorService {
                 return;
             }
             try {
-                chatMessageRepository.save(assistantMessage());
+                ChatMessage partial = assistantMessage();
+                chatMessageRepository.save(partial);
             } catch (Exception e) {
                 log.warn("Failed to persist partial assistant message: {}", e.getMessage());
             }
@@ -225,9 +231,12 @@ public class ChatOrchestratorService {
         private ChatMessage assistantMessage() {
             String content = parser.getAccumulatedContent();
             String reasoning = parser.getAccumulatedReasoning();
+            String reasoningContent = reasoning.isBlank() ? null : reasoning;
+            String toolCalls = serializeToolCalls();
+            int tokenCount = estimateTokens(content + reasoning);
             return ChatMessage.builder().conversationId(request.conversationId()).role(ChatMessage.Role.ASSISTANT)
-                    .content(content).reasoningContent(reasoning.isBlank() ? null : reasoning)
-                    .toolCalls(serializeToolCalls()).tokenCount(estimateTokens(content + reasoning)).build();
+                    .content(content).reasoningContent(reasoningContent).toolCalls(toolCalls).tokenCount(tokenCount)
+                    .build();
         }
 
         private String serializeToolCalls() {
@@ -248,7 +257,7 @@ public class ChatOrchestratorService {
 
         private String describeError(Throwable error) {
             String details = collectMessages(error);
-            if (details.contains(TOOLS_UNSUPPORTED_MARKER) || (details.contains("400") && details.contains("tools"))) {
+            if (details.contains(TOOLS_UNSUPPORTED_MARKER)) {
                 return "Model '" + model + "' does not support tool calling in Ollama. Please disable Tools or "
                         + "select a tool-compatible model.";
             }

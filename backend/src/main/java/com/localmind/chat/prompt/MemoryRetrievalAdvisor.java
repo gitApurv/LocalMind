@@ -10,14 +10,14 @@ import java.util.stream.Collectors;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.stereotype.Component;
 
-/**
- * Step 2: appends semantically relevant (non-pinned) user memories to the system message.
- */
+/** Step 2: appends semantically relevant (non-pinned) user memories to the system message. */
 @Component
 public class MemoryRetrievalAdvisor implements PromptAdvisor {
 
@@ -45,7 +45,7 @@ public class MemoryRetrievalAdvisor implements PromptAdvisor {
     }
 
     @Override
-    public ChatClientRequest before(ChatClientRequest request, AdvisorChain chain) {
+    public ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain) {
         if (!enabled || request == null || request.context() == null) {
             return request;
         }
@@ -55,28 +55,25 @@ public class MemoryRetrievalAdvisor implements PromptAdvisor {
             return request;
         }
 
-        try {
-            List<Document> hits = searchMemories(userId, query);
-            if (hits == null || hits.isEmpty()) {
-                return request;
-            }
-            String memories = renderMemories(hits, pinnedFacts(userId));
-            if (memories == null) {
-                return request;
-            }
-            return request.mutate()
-                    .prompt(request.prompt()
-                            .augmentSystemMessage(existing -> new SystemMessage(existing.getText() + memories)))
-                    .build();
-        } catch (Exception e) {
+        List<Document> hits = searchMemories(userId, query);
+        if (hits == null || hits.isEmpty()) {
             return request;
         }
+        Set<String> pinnedFacts = pinnedFacts(userId);
+        String memories = renderMemories(hits, pinnedFacts);
+        if (memories == null) {
+            return request;
+        }
+        Prompt augmentedPrompt = request.prompt()
+                .augmentSystemMessage(existing -> new SystemMessage(existing.getText() + memories));
+        return request.mutate().prompt(augmentedPrompt).build();
     }
 
     private List<Document> searchMemories(String userId, String query) {
-        return vectorStore.similaritySearch(
-                SearchRequest.builder().query(query.trim()).topK(TOP_K).similarityThreshold(SIMILARITY_THRESHOLD)
-                        .filterExpression(VectorFilters.userMemories(userId)).build());
+        Filter.Expression filter = VectorFilters.userMemories(userId);
+        SearchRequest searchRequest = SearchRequest.builder().query(query.trim()).topK(TOP_K)
+                .similarityThreshold(SIMILARITY_THRESHOLD).filterExpression(filter).build();
+        return vectorStore.similaritySearch(searchRequest);
     }
 
     /** Pinned memories are already in the system prompt (step 1). */

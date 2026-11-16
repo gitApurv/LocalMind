@@ -3,8 +3,8 @@ package com.localmind.chat.prompt;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import com.localmind.chat.config.PromptProperties;
 import com.localmind.llm.model.ModelProfile;
+import com.localmind.support.TestProperties;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -16,7 +16,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 
 class PromptStatsAdvisorTest {
     private final TokenCounter tokenCounter = new CharacterTokenCounter();
-    private final PromptStatsAdvisor advisor = new PromptStatsAdvisor(tokenCounter, PromptProperties.defaults());
+    private final PromptStatsAdvisor advisor = new PromptStatsAdvisor(tokenCounter, TestProperties.promptDefaults());
 
     @Test
     void beforeComputesAndLogsPromptTokens() {
@@ -31,5 +31,15 @@ class PromptStatsAdvisorTest {
 
         assertNotNull(modified);
         assertEquals(500, advisor.getOrder());
+    }
+
+    @Test
+    void returnsRequestUnchangedWhenCountingFails() {
+        PromptStatsAdvisor failing = new PromptStatsAdvisor(text -> {
+            throw new IllegalStateException("tokenizer failure");
+        }, TestProperties.promptDefaults());
+        ChatClientRequest request = ChatClientRequest.builder().prompt(new Prompt("Hello")).context(Map.of()).build();
+
+        assertSame(request, failing.before(request, mock(AdvisorChain.class)));
     }
 }

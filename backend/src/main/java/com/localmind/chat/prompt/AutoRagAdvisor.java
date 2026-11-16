@@ -8,12 +8,15 @@ import com.localmind.common.ai.VectorFilters;
 import com.localmind.common.ai.VectorMetadata;
 import com.localmind.llm.model.ModelProfile;
 import java.util.List;
+import java.util.Map;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.stereotype.Component;
 
 /**
@@ -47,7 +50,7 @@ public class AutoRagAdvisor implements PromptAdvisor {
     }
 
     @Override
-    public ChatClientRequest before(ChatClientRequest request, AdvisorChain chain) {
+    public ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain) {
         if (!enabled || request == null || request.context() == null) {
             return request;
         }
@@ -62,23 +65,22 @@ public class AutoRagAdvisor implements PromptAdvisor {
             return request;
         }
 
-        try {
-            String references = renderReferences(search(userId, conversationId, userText), ragBudget(request));
-            if (references.isEmpty()) {
-                return request;
-            }
-            String augmented = references + userText;
-            return request.mutate().prompt(request.prompt().augmentUserMessage(message -> new UserMessage(augmented)))
-                    .build();
-        } catch (Exception e) {
+        List<Document> documents = search(userId, conversationId, userText);
+        int budget = ragBudget(request);
+        String references = renderReferences(documents, budget);
+        if (references.isEmpty()) {
             return request;
         }
+        String augmented = references + userText;
+        Prompt augmentedPrompt = request.prompt().augmentUserMessage(message -> new UserMessage(augmented));
+        return request.mutate().prompt(augmentedPrompt).build();
     }
 
     private List<Document> search(String userId, String conversationId, String query) {
-        return vectorStore.similaritySearch(
-                SearchRequest.builder().query(query.trim()).topK(TOP_K).similarityThreshold(SIMILARITY_THRESHOLD)
-                        .filterExpression(VectorFilters.documentChunks(userId, conversationId)).build());
+        Filter.Expression filter = VectorFilters.documentChunks(userId, conversationId);
+        SearchRequest searchRequest = SearchRequest.builder().query(query.trim()).topK(TOP_K)
+                .similarityThreshold(SIMILARITY_THRESHOLD).filterExpression(filter).build();
+        return vectorStore.similaritySearch(searchRequest);
     }
 
     private static int ragBudget(ChatClientRequest request) {
@@ -106,8 +108,9 @@ public class AutoRagAdvisor implements PromptAdvisor {
     }
 
     private static String referenceBlock(Document document) {
-        String fileName = document.getMetadata() != null
-                ? String.valueOf(document.getMetadata().getOrDefault(VectorMetadata.FILE_NAME, "doc"))
+        Map<String, Object> metadata = document.getMetadata();
+        String fileName = metadata != null
+                ? String.valueOf(metadata.getOrDefault(VectorMetadata.FILE_NAME, "doc"))
                 : "doc";
         String snippet = document.getText() != null ? document.getText().trim() : "";
         return "<reference source=\"" + fileName + "\">\n" + snippet + "\n</reference>\n\n";
