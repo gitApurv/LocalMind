@@ -14,6 +14,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +29,12 @@ import org.springframework.web.multipart.MultipartFile;
 public class AttachmentService {
 
     private static final String UNNAMED_FILE = "unnamed";
+    /** Length of {@code attachments.file_name}. */
+    static final int MAX_FILE_NAME_LENGTH = 255;
+    private static final String OCTET_STREAM = "application/octet-stream";
+    /** Content types are derived from the extension, never taken from the client. */
+    private static final Map<String, String> CONTENT_TYPES = Map.of("pdf", "application/pdf", "txt", "text/plain",
+            "md", "text/markdown", "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
 
     private final AttachmentRepository attachmentRepository;
     private final FileStorageService fileStorageService;
@@ -41,13 +49,15 @@ public class AttachmentService {
 
         String attachmentId = UUID.randomUUID().toString();
         String fileName = Objects.requireNonNullElse(file.getOriginalFilename(), UNNAMED_FILE);
-        storeFile(file, userId, attachmentId, fileName);
+        // Registered before storing so a copy that fails half-way is removed with the rolled-back row.
         TransactionHooks.onOutcome(() -> documentEtlService.processAttachment(attachmentId),
                 () -> fileStorageService.delete(userId, attachmentId, fileName));
+        storeFile(file, userId, attachmentId, fileName);
 
-        attachmentRepository.save(Attachment.builder().id(attachmentId).conversationId(conversationId).userId(userId)
-                .fileName(fileName).fileType(file.getContentType()).fileSize(file.getSize())
-                .status(Attachment.Status.PROCESSING).build());
+        Attachment attachment = Attachment.builder().id(attachmentId).conversationId(conversationId).userId(userId)
+                .fileName(fileName).fileType(contentTypeOf(fileName)).fileSize(file.getSize())
+                .status(Attachment.Status.PROCESSING).build();
+        attachmentRepository.save(attachment);
 
         return new UploadResponse(attachmentId, Attachment.Status.PROCESSING.name(), fileName, file.getSize());
     }
@@ -81,6 +91,18 @@ public class AttachmentService {
         TransactionHooks.afterCommit(() -> deleteStoredData(conversationId, attachments));
     }
 
+    /**
+     * The type a download is served with, from the file extension. Rows stored before types were derived on the server
+     * may hold a client-supplied type, so the stored value is not used.
+     */
+    public String contentTypeOf(Attachment attachment) {
+        return contentTypeOf(attachment.getFileName());
+    }
+
+    private static String contentTypeOf(String fileName) {
+        return CONTENT_TYPES.getOrDefault(fileExtension(fileName).toLowerCase(Locale.ROOT), OCTET_STREAM);
+    }
+
     public Resource loadAttachmentFile(Attachment attachment) {
         return fileStorageService.loadAsResource(attachment.getUserId(), attachment.getId(), attachment.getFileName());
     }
@@ -93,7 +115,11 @@ public class AttachmentService {
             throw new BadRequestException(
                     "File exceeds maximum size limit of " + fileStorageProperties.maxFileSize().toMegabytes() + "MB");
         }
-        String extension = fileExtension(Objects.requireNonNullElse(file.getOriginalFilename(), UNNAMED_FILE));
+        String originalName = Objects.requireNonNullElse(file.getOriginalFilename(), UNNAMED_FILE);
+        if (originalName.length() > MAX_FILE_NAME_LENGTH) {
+            throw new BadRequestException("File name must not exceed " + MAX_FILE_NAME_LENGTH + " characters");
+        }
+        String extension = fileExtension(originalName);
         if (!fileStorageProperties.isAllowedExtension(extension)) {
             throw new BadRequestException("Unsupported file format '" + extension + "'. Allowed: "
                     + fileStorageProperties.allowedExtensions());
@@ -110,6 +136,9 @@ public class AttachmentService {
 
     /** Returns the extension after the last dot, ignoring leading-dot names. */
     private static String fileExtension(String fileName) {
+        if (fileName == null) {
+            return "";
+        }
         int dot = fileName.lastIndexOf('.');
         return dot > 0 && dot < fileName.length() - 1 ? fileName.substring(dot + 1) : "";
     }

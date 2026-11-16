@@ -12,7 +12,6 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -50,19 +49,10 @@ public class AttachmentController {
         Attachment attachment = attachmentService.getAttachment(conversationId, attachmentId, userId);
         ContentDisposition disposition = ContentDisposition.attachment()
                 .filename(attachment.getFileName(), StandardCharsets.UTF_8).build();
-        return ResponseEntity.ok().contentType(mediaTypeOf(attachment))
-                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
-                .body(attachmentService.loadAttachmentFile(attachment));
-    }
-
-    private static MediaType mediaTypeOf(Attachment attachment) {
-        if (attachment.getFileType() == null) {
-            return MediaType.APPLICATION_OCTET_STREAM;
-        }
-        try {
-            return MediaType.parseMediaType(attachment.getFileType());
-        } catch (InvalidMediaTypeException e) {
-            return MediaType.APPLICATION_OCTET_STREAM;
-        }
+        MediaType mediaType = MediaType.parseMediaType(attachmentService.contentTypeOf(attachment));
+        String dispositionHeader = disposition.toString();
+        Resource file = attachmentService.loadAttachmentFile(attachment);
+        return ResponseEntity.ok().contentType(mediaType).header(HttpHeaders.CONTENT_DISPOSITION, dispositionHeader)
+                .header("X-Content-Type-Options", "nosniff").body(file);
     }
 }

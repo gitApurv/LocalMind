@@ -14,6 +14,7 @@ import org.apache.tika.Tika;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.core.io.Resource;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -67,36 +68,37 @@ public class DocumentEtlService {
 
     private void ingest(Attachment attachment) {
         try {
-            log.info("Starting document ingestion ETL for attachment '{}' ({})", attachment.getFileName(),
-                    attachment.getId());
-            String text = extractText(attachment);
-            int chunkCount = 0;
-            if (text == null || text.isBlank()) {
-                log.info("Attachment '{}' yielded empty or whitespace-only text", attachment.getFileName());
-            } else {
-                List<Document> chunks = split(attachment, text);
-                log.info("Indexing {} vector chunks for attachment '{}' in Qdrant", chunks.size(),
-                        attachment.getFileName());
-                vectorStore.add(chunks);
-                chunkCount = chunks.size();
-            }
-            attachment.markReady(chunkCount);
-            saveUnlessDeleted(attachment);
+            int chunkCount = index(attachment);
+            recordOutcome(attachment, Attachment.Status.READY, chunkCount, null);
             log.info("ETL successfully completed for attachment '{}'", attachment.getId());
         } catch (Exception e) {
             log.error("Document ETL failed for attachment '{}': {}", attachment.getId(), e.getMessage(), e);
-            attachment.markFailed(PROCESSING_FAILED_MESSAGE);
-            saveUnlessDeleted(attachment);
+            recordOutcome(attachment, Attachment.Status.FAILED, 0, PROCESSING_FAILED_MESSAGE);
         }
     }
 
+    /** Extracts, splits and indexes the document; returns the number of chunks stored. */
+    private int index(Attachment attachment) throws Exception {
+        log.info("Starting document ingestion ETL for attachment '{}' ({})", attachment.getFileName(),
+                attachment.getId());
+        String text = extractText(attachment);
+        if (text == null || text.isBlank()) {
+            log.info("Attachment '{}' yielded empty or whitespace-only text", attachment.getFileName());
+            return 0;
+        }
+        List<Document> chunks = split(attachment, text);
+        log.info("Indexing {} vector chunks for attachment '{}' in Qdrant", chunks.size(), attachment.getFileName());
+        vectorStore.add(chunks);
+        return chunks.size();
+    }
+
     /**
-     * The conversation may have been deleted while the document was processed; saving would then resurrect the row, so
-     * its chunks are removed instead.
+     * Runs outside the upload transaction, so it updates only the columns it owns. If the conversation was deleted
+     * while the document was processed, no row is updated and the chunks just written are removed.
      */
-    private void saveUnlessDeleted(Attachment attachment) {
-        if (attachmentRepository.existsById(attachment.getId())) {
-            attachmentRepository.save(attachment);
+    private void recordOutcome(Attachment attachment, Attachment.Status status, int chunkCount, String errorMessage) {
+        int updated = attachmentRepository.updateOutcome(attachment.getId(), status, chunkCount, errorMessage);
+        if (updated > 0) {
             return;
         }
         log.info("Attachment '{}' was deleted during processing; discarding its chunks", attachment.getId());
@@ -104,19 +106,18 @@ public class DocumentEtlService {
     }
 
     private String extractText(Attachment attachment) throws Exception {
-        try (InputStream inputStream = fileStorageService
-                .loadAsResource(attachment.getUserId(), attachment.getId(), attachment.getFileName())
-                .getInputStream()) {
+        Resource resource = fileStorageService.loadAsResource(attachment.getUserId(), attachment.getId(),
+                attachment.getFileName());
+        try (InputStream inputStream = resource.getInputStream()) {
             return tika.parseToString(inputStream);
         }
     }
 
-    /**
-     * Every chunk carries tenancy metadata so searches can be filtered per user.
-     */
+    /** Every chunk carries tenancy metadata so searches can be filtered per user. */
     private List<Document> split(Attachment attachment, String text) {
         Map<String, Object> tenantMetadata = tenantMetadata(attachment);
-        List<Document> chunks = tokenTextSplitter.split(new Document(text, new HashMap<>(tenantMetadata)));
+        Document document = new Document(text, new HashMap<>(tenantMetadata));
+        List<Document> chunks = tokenTextSplitter.split(document);
         for (int i = 0; i < chunks.size(); i++) {
             Map<String, Object> metadata = chunks.get(i).getMetadata();
             metadata.putAll(tenantMetadata);

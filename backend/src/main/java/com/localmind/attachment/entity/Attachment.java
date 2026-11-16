@@ -5,6 +5,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import java.time.Instant;
@@ -16,7 +17,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "attachments")
+@Table(name = "attachments", indexes = {
+        // Attachment list, READY check before every chat turn, and conversation delete.
+        @Index(name = "idx_attachments_conversation_created", columnList = "conversation_id, created_at")})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -70,16 +73,5 @@ public class Attachment {
         if (createdAt == null) {
             createdAt = Instant.now();
         }
-    }
-
-    public void markReady(int chunks) {
-        status = Status.READY;
-        chunkCount = chunks;
-        errorMessage = null;
-    }
-
-    public void markFailed(String reason) {
-        status = Status.FAILED;
-        errorMessage = reason;
     }
 }

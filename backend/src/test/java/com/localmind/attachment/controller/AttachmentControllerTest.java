@@ -126,13 +126,16 @@ class AttachmentControllerTest {
                 attachmentId, "download.txt");
 
         attachmentRepository.save(Attachment.builder().id(attachmentId).conversationId(convA.getId())
-                .userId(userA.getId()).fileName("download.txt").fileType("text/plain")
+                .userId(userA.getId()).fileName("download.txt").fileType("text/html")
                 .fileSize((long) fileContent.length()).status(Attachment.Status.READY).chunkCount(1).build());
 
         mockMvc.perform(get("/api/conversations/" + convA.getId() + "/attachments/" + attachmentId + "/download")
                 .with(jwt().jwt(jwt -> jwt.subject(userA.getId()).claim("email", userA.getEmail()))))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, containsString("download.txt")))
+                // The type comes from the extension, not from the (client-supplied) stored value.
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, containsString("text/plain")))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff"))
                 .andExpect(content().string(fileContent));
     }
 

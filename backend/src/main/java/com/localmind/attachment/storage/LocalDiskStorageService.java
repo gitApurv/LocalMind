@@ -5,6 +5,7 @@ import com.localmind.common.exception.ResourceNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -45,11 +46,13 @@ public class LocalDiskStorageService implements FileStorageService {
     public Resource loadAsResource(String userId, String attachmentId, String originalFileName) {
         Path targetPath = resolveSafePath(userId, attachmentId, originalFileName);
         try {
-            Resource resource = new UrlResource(targetPath.toUri());
+            URI uri = targetPath.toUri();
+            Resource resource = new UrlResource(uri);
             if (resource.exists() && resource.isReadable()) {
                 return resource;
             }
-            throw new ResourceNotFoundException("File not found or unreadable: " + originalFileName);
+            log.warn("Stored file of attachment '{}' is missing or unreadable", attachmentId);
+            throw new ResourceNotFoundException("File not found");
         } catch (MalformedURLException e) {
             throw new ResourceNotFoundException("Invalid file path URI", e);
         }
@@ -65,9 +68,7 @@ public class LocalDiskStorageService implements FileStorageService {
         }
     }
 
-    /**
-     * Builds the storage path and rejects anything that escapes the user's directory (directory traversal guard).
-     */
+    /** Builds the storage path and rejects anything that escapes the user's directory (directory traversal guard). */
     private Path resolveSafePath(String userId, String attachmentId, String originalFileName) {
         if (userId == null || userId.isBlank() || attachmentId == null || attachmentId.isBlank()) {
             throw new IllegalArgumentException("User ID and Attachment ID must not be blank");
@@ -81,7 +82,8 @@ public class LocalDiskStorageService implements FileStorageService {
     }
 
     private static String sanitizeFileName(String originalFileName) {
-        String baseName = Paths.get(originalFileName != null ? originalFileName : "unnamed").getFileName().toString();
+        String rawName = originalFileName != null ? originalFileName : "unnamed";
+        String baseName = Paths.get(rawName).getFileName().toString();
         String safeName = baseName.replaceAll(UNSAFE_FILENAME_CHARS, "_");
         return safeName.isBlank() ? FALLBACK_FILENAME : safeName;
     }

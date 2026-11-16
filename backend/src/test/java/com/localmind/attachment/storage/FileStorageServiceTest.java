@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import com.localmind.attachment.config.FileStorageProperties;
 import com.localmind.common.exception.ResourceNotFoundException;
+import com.localmind.support.TestProperties;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -24,7 +25,7 @@ class FileStorageServiceTest {
 
     @BeforeEach
     void setUp() {
-        FileStorageProperties properties = FileStorageProperties.withUploadDir(tempDir.toString());
+        FileStorageProperties properties = TestProperties.fileStorage(tempDir.toString());
         fileStorageService = new LocalDiskStorageService(properties);
     }
 
@@ -72,8 +73,6 @@ class FileStorageServiceTest {
         String attachmentId = "att-evil";
         String maliciousFileName = "../../secret.txt";
 
-        // Must either throw SecurityException or sanitize into a safe name within the
-        // user directory
         assertDoesNotThrow(() -> fileStorageService.store(inputStream, userId, attachmentId, maliciousFileName));
 
         // The name was reduced to its last segment inside the user's own directory.

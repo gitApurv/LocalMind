@@ -37,6 +37,7 @@ class DocumentEtlServiceTest {
 
     static class TestVectorStore implements VectorStore {
         final List<Document> addedDocuments = new ArrayList<>();
+        int filterDeletes;
 
         @Override
         public void add(List<Document> documents) {
@@ -49,6 +50,7 @@ class DocumentEtlServiceTest {
 
         @Override
         public void delete(org.springframework.ai.vectorstore.filter.Filter.Expression filterExpression) {
+            filterDeletes++;
         }
 
         @Override
@@ -72,7 +74,8 @@ class DocumentEtlServiceTest {
                 .build();
 
         when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.of(attachment));
-        when(attachmentRepository.existsById(attachmentId)).thenReturn(true);
+        when(attachmentRepository.updateOutcome(eq(attachmentId), eq(Attachment.Status.READY), anyInt(), isNull()))
+                .thenReturn(1);
         String sampleText = "LocalMind is an open-source privacy-first conversational AI platform. "
                 + "It uses Ollama for local model execution and Qdrant for RAG vector retrieval.";
         Resource mockResource = new ByteArrayResource(sampleText.getBytes(StandardCharsets.UTF_8));
@@ -91,10 +94,9 @@ class DocumentEtlServiceTest {
             assertNotNull(doc.getMetadata().get("chunkIndex"));
         }
 
-        assertEquals(Attachment.Status.READY, attachment.getStatus());
-        assertTrue(attachment.getChunkCount() > 0);
-        assertNull(attachment.getErrorMessage());
-        verify(attachmentRepository).save(attachment);
+        verify(attachmentRepository).updateOutcome(attachmentId, Attachment.Status.READY, savedDocs.size(), null);
+        verify(attachmentRepository, never()).save(any());
+        assertEquals(0, vectorStore.filterDeletes);
     }
 
     @Test
@@ -106,7 +108,8 @@ class DocumentEtlServiceTest {
                 .build();
 
         when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.of(attachment));
-        when(attachmentRepository.existsById(attachmentId)).thenReturn(true);
+        when(attachmentRepository.updateOutcome(eq(attachmentId), eq(Attachment.Status.FAILED), eq(0), anyString()))
+                .thenReturn(1);
 
         Resource mockBrokenResource = mock(Resource.class);
         when(mockBrokenResource.getInputStream()).thenThrow(new IOException("Disk I/O failure or corrupt payload"));
@@ -114,9 +117,9 @@ class DocumentEtlServiceTest {
 
         assertDoesNotThrow(() -> documentEtlService.processAttachment(attachmentId));
 
-        assertEquals(Attachment.Status.FAILED, attachment.getStatus());
-        assertNotNull(attachment.getErrorMessage());
-        verify(attachmentRepository).save(attachment);
+        verify(attachmentRepository).updateOutcome(eq(attachmentId), eq(Attachment.Status.FAILED), eq(0),
+                argThat(message -> message.startsWith("The document could not be processed")));
+        verify(attachmentRepository, never()).save(any());
         assertTrue(vectorStore.addedDocuments.isEmpty());
     }
 
@@ -127,12 +130,14 @@ class DocumentEtlServiceTest {
         Attachment attachment = Attachment.builder().id(attachmentId).conversationId("conv-1").userId("user-1")
                 .fileName("gone.txt").status(Attachment.Status.PROCESSING).build();
         when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.of(attachment));
-        when(attachmentRepository.existsById(attachmentId)).thenReturn(false);
+        when(attachmentRepository.updateOutcome(any(), any(), anyInt(), any())).thenReturn(0);
         when(fileStorageService.loadAsResource(any(), any(), any()))
                 .thenReturn(new ByteArrayResource("Some text content".getBytes(StandardCharsets.UTF_8)));
 
         documentEtlService.processAttachment(attachmentId);
 
         verify(attachmentRepository, never()).save(any());
+        assertFalse(vectorStore.addedDocuments.isEmpty());
+        assertEquals(1, vectorStore.filterDeletes);
     }
 }
