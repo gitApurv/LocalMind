@@ -26,7 +26,8 @@ public class CurrentUserIdArgumentResolver implements HandlerMethodArgumentResol
     @Override
     public String resolveArgument(MethodParameter parameter, ModelAndViewContainer mavContainer,
             NativeWebRequest webRequest, WebDataBinderFactory binderFactory) {
-        return resolveUserId(SecurityContextHolder.getContext().getAuthentication());
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        return resolveUserId(authentication);
     }
 
     private static String resolveUserId(Authentication authentication) {

@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
@@ -45,6 +46,7 @@ class ProblemDetailSecurityHandler implements AuthenticationEntryPoint, AccessDe
     private void writeProblem(HttpServletResponse response, HttpStatus status, String message) throws IOException {
         response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
-        objectMapper.writeValue(response.getOutputStream(), ProblemDetails.of(status, message));
+        ProblemDetail problem = ProblemDetails.of(status, message);
+        objectMapper.writeValue(response.getOutputStream(), problem);
     }
 }

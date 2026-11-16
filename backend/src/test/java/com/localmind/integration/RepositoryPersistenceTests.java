@@ -14,6 +14,7 @@ import com.localmind.memory.entity.UserMemory;
 import com.localmind.memory.repository.UserMemoryRepository;
 import com.localmind.user.entity.User;
 import com.localmind.user.repository.UserRepository;
+import jakarta.persistence.EntityManager;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -47,6 +48,9 @@ class RepositoryPersistenceTests {
 
     @Autowired
     private UserMemoryRepository userMemoryRepository;
+
+    @Autowired
+    private EntityManager entityManager;
 
     @Test
     @DisplayName("User lifecycle: Persist, auto-generate UUID, query by email, check existence")
@@ -103,11 +107,9 @@ class RepositoryPersistenceTests {
         assertThat(savedConv.isPinned()).isTrue();
         assertThat(savedConv.getModelName()).isEqualTo("gemma3:1b");
 
-        // Verify multi-tenant ownership guard query
         assertThat(conversationRepository.existsByIdAndUserId(savedConv.getId(), user.getId())).isTrue();
         assertThat(conversationRepository.existsByIdAndUserId(savedConv.getId(), "unauthorized_user_id")).isFalse();
 
-        // Create Messages with explicit chronological order
         Instant now = Instant.now();
         ChatMessage userMsg = ChatMessage.builder().conversationId(savedConv.getId()).role(ChatMessage.Role.USER)
                 .content("What is quantum entanglement?").tokenCount(15).createdAt(now.minus(5, ChronoUnit.SECONDS))
@@ -146,7 +148,6 @@ class RepositoryPersistenceTests {
         assertThat(saved.getId()).isNotNull();
         assertThat(saved.getStatus()).isEqualTo(Attachment.Status.PROCESSING);
 
-        // Update status to READY with chunk count
         saved.setStatus(Attachment.Status.READY);
         saved.setChunkCount(42);
         attachmentRepository.saveAndFlush(saved);
@@ -171,5 +172,91 @@ class RepositoryPersistenceTests {
         List<UserMemory> memories = userMemoryRepository.findByUserIdOrderByCreatedAtDesc(user.getId());
         assertThat(memories).hasSize(1);
         assertThat(memories.get(0).getMemoryFact()).contains("dark mode");
+    }
+
+    @Test
+    @DisplayName("Attachment updateOutcome: updates only the ETL columns and never re-inserts a deleted row")
+    void testAttachmentUpdateOutcome() {
+        Attachment attachment = attachmentRepository.saveAndFlush(Attachment.builder().conversationId("conv-etl")
+                .userId("user-etl").fileName("notes.md").fileType("text/markdown").fileSize(10L)
+                .status(Attachment.Status.PROCESSING).build());
+
+        int updated = attachmentRepository.updateOutcome(attachment.getId(), Attachment.Status.READY, 7, null);
+        entityManager.clear();
+
+        assertThat(updated).isEqualTo(1);
+        Attachment reloaded = attachmentRepository.findById(attachment.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(Attachment.Status.READY);
+        assertThat(reloaded.getChunkCount()).isEqualTo(7);
+        assertThat(reloaded.getFileName()).isEqualTo("notes.md");
+
+        attachmentRepository.deleteByConversationId("conv-etl");
+        int afterDelete = attachmentRepository.updateOutcome(attachment.getId(), Attachment.Status.FAILED, 0, "x");
+        entityManager.clear();
+
+        assertThat(afterDelete).isZero();
+        assertThat(attachmentRepository.existsById(attachment.getId())).isFalse();
+    }
+
+    @Test
+    @DisplayName("RefreshToken cleanup: deleteExpiredBefore removes only expired tokens, rotated or not")
+    void testDeleteExpiredRefreshTokens() {
+        Instant now = Instant.now();
+        refreshTokenRepository.saveAndFlush(token("expired-active", now.minus(1, ChronoUnit.HOURS), null));
+        refreshTokenRepository.saveAndFlush(token("expired-rotated", now.minus(1, ChronoUnit.HOURS), now.minus(2,
+                ChronoUnit.DAYS)));
+        refreshTokenRepository.saveAndFlush(token("valid-rotated", now.plus(1, ChronoUnit.DAYS), now));
+        refreshTokenRepository.saveAndFlush(token("valid-active", now.plus(1, ChronoUnit.DAYS), null));
+
+        int deleted = refreshTokenRepository.deleteExpiredBefore(now);
+        entityManager.clear();
+
+        assertThat(deleted).isEqualTo(2);
+        assertThat(refreshTokenRepository.findByTokenHash("expired-active")).isEmpty();
+        assertThat(refreshTokenRepository.findByTokenHash("expired-rotated")).isEmpty();
+        assertThat(refreshTokenRepository.findByTokenHash("valid-rotated")).isPresent();
+        assertThat(refreshTokenRepository.findByTokenHash("valid-active")).isPresent();
+    }
+
+    @Test
+    @DisplayName("Attachment failAllWithStatus: only attachments still PROCESSING become FAILED")
+    void testFailInterruptedAttachments() {
+        Attachment processing = attachmentRepository.saveAndFlush(Attachment.builder().conversationId("conv-restart")
+                .userId("u").fileName("a.txt").status(Attachment.Status.PROCESSING).build());
+        Attachment ready = attachmentRepository.saveAndFlush(Attachment.builder().conversationId("conv-restart")
+                .userId("u").fileName("b.txt").status(Attachment.Status.READY).chunkCount(3).build());
+
+        int changed = attachmentRepository.failAllWithStatus(Attachment.Status.PROCESSING, Attachment.Status.FAILED,
+                "interrupted");
+        entityManager.clear();
+
+        assertThat(changed).isEqualTo(1);
+        Attachment failed = attachmentRepository.findById(processing.getId()).orElseThrow();
+        assertThat(failed.getStatus()).isEqualTo(Attachment.Status.FAILED);
+        assertThat(failed.getErrorMessage()).isEqualTo("interrupted");
+        assertThat(attachmentRepository.findById(ready.getId()).orElseThrow().getStatus())
+                .isEqualTo(Attachment.Status.READY);
+    }
+
+    @Test
+    @DisplayName("Conversation updateSummary: a summary covering older turns never replaces a newer one")
+    void testUpdateSummaryNeverMovesWatermarkBackwards() {
+        Conversation conversation = conversationRepository
+                .saveAndFlush(Conversation.builder().userId("u-summary").title("Summary").build());
+        Instant older = Instant.parse("2026-01-01T10:00:00Z");
+        Instant newer = Instant.parse("2026-01-01T11:00:00Z");
+
+        assertThat(conversationRepository.updateSummary(conversation.getId(), "newer summary", newer)).isEqualTo(1);
+        assertThat(conversationRepository.updateSummary(conversation.getId(), "stale summary", older)).isZero();
+        entityManager.clear();
+
+        Conversation reloaded = conversationRepository.findById(conversation.getId()).orElseThrow();
+        assertThat(reloaded.getSummary()).isEqualTo("newer summary");
+        assertThat(reloaded.getSummarizedThrough()).isEqualTo(newer);
+    }
+
+    private static RefreshToken token(String hash, Instant expiresAt, Instant rotatedAt) {
+        return RefreshToken.builder().userId("user-cleanup").tokenHash(hash).expiresAt(expiresAt)
+                .revoked(rotatedAt != null).rotatedAt(rotatedAt).build();
     }
 }

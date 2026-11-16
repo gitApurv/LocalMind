@@ -58,8 +58,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             HttpHeaders headers, HttpStatusCode status, WebRequest request) {
         String message = ex.getBindingResult().getFieldErrors().stream()
                 .map(error -> error.getField() + ": " + error.getDefaultMessage()).collect(Collectors.joining("; "));
-        return ResponseEntity.status(status).headers(headers)
-                .body(ProblemDetails.of(status, message.isBlank() ? "Validation failed" : message));
+        String detail = message.isBlank() ? "Validation failed" : message;
+        ProblemDetail problem = ProblemDetails.of(status, detail);
+        return ResponseEntity.status(status).headers(headers).body(problem);
     }
 
     /** Adds the {@code message} property to every ProblemDetail produced by the base class. */

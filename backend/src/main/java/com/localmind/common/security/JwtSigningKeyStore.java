@@ -10,6 +10,7 @@ import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.PublicKey;
 import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.RSAPublicKeySpec;
@@ -56,12 +57,12 @@ final class JwtSigningKeyStore {
         String pem = Files.readString(keyFile, StandardCharsets.US_ASCII).replace(PEM_HEADER, "")
                 .replace(PEM_FOOTER, "").replaceAll("\\s", "");
         KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        byte[] privateKeyBytes = Base64.getDecoder().decode(pem);
         RSAPrivateCrtKey privateKey = (RSAPrivateCrtKey) keyFactory
-                .generatePrivate(new PKCS8EncodedKeySpec(Base64.getDecoder().decode(pem)));
-        return new KeyPair(
-                keyFactory
-                        .generatePublic(new RSAPublicKeySpec(privateKey.getModulus(), privateKey.getPublicExponent())),
-                privateKey);
+                .generatePrivate(new PKCS8EncodedKeySpec(privateKeyBytes));
+        RSAPublicKeySpec publicKeySpec = new RSAPublicKeySpec(privateKey.getModulus(), privateKey.getPublicExponent());
+        PublicKey publicKey = keyFactory.generatePublic(publicKeySpec);
+        return new KeyPair(publicKey, privateKey);
     }
 
     private static void write(Path keyFile, KeyPair keyPair) throws IOException {
@@ -69,10 +70,10 @@ final class JwtSigningKeyStore {
         if (parent != null) {
             Files.createDirectories(parent);
         }
-        String pem = PEM_HEADER + "\n"
-                + Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.US_ASCII))
-                        .encodeToString(keyPair.getPrivate().getEncoded())
-                + "\n" + PEM_FOOTER + "\n";
+        byte[] lineSeparator = "\n".getBytes(StandardCharsets.US_ASCII);
+        byte[] privateKeyBytes = keyPair.getPrivate().getEncoded();
+        String body = Base64.getMimeEncoder(64, lineSeparator).encodeToString(privateKeyBytes);
+        String pem = PEM_HEADER + "\n" + body + "\n" + PEM_FOOTER + "\n";
         Files.writeString(keyFile, pem, StandardCharsets.US_ASCII);
         try {
             Files.setPosixFilePermissions(keyFile, PosixFilePermissions.fromString("rw-------"));

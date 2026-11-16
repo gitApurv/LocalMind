@@ -1,8 +1,6 @@
 package com.localmind.common.ai;
 
-/**
- * Payload keys and document types stored alongside vectors in Qdrant.
- */
+/** Payload keys and document types stored alongside vectors in Qdrant. */
 public final class VectorMetadata {
 
     public static final String USER_ID = "userId";

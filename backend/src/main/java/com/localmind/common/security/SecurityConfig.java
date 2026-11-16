@@ -22,6 +22,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.web.SecurityFilterChain;
@@ -34,8 +35,15 @@ import tools.jackson.databind.ObjectMapper;
 @EnableWebSecurity
 public class SecurityConfig {
 
-    /** Endpoints reachable without a token. Only the health probe of Actuator is public. */
-    private static final String[] PUBLIC_PATHS = {"/api/auth/**", "/error", "/actuator/health"};
+    /** {@code iss} claim of every access token; tokens from any other issuer are rejected. */
+    public static final String TOKEN_ISSUER = "localmind";
+
+    /**
+     * Endpoints reachable without a token. Listed one by one so {@code /api/auth/me} stays protected. Only the health
+     * probe of Actuator is public.
+     */
+    private static final String[] PUBLIC_PATHS = {"/api/auth/register", "/api/auth/login", "/api/auth/refresh",
+            "/api/auth/logout", "/error", "/actuator/health"};
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, CorsConfigurationSource corsConfigurationSource,
@@ -77,7 +85,8 @@ public class SecurityConfig {
 
     @Bean
     public KeyPair rsaKeyPair(JwtProperties jwtProperties) {
-        return JwtSigningKeyStore.loadOrCreate(Path.of(jwtProperties.keyFile()));
+        Path keyFile = Path.of(jwtProperties.keyFile());
+        return JwtSigningKeyStore.loadOrCreate(keyFile);
     }
 
     @Bean
@@ -87,8 +96,8 @@ public class SecurityConfig {
         RSAPrivateKey privateKey = (RSAPrivateKey) rsaKeyPair.getPrivate();
         try {
             RSAKey publicJwk = new RSAKey.Builder(publicKey).build();
-            return new RSAKey.Builder(publicKey).privateKey(privateKey).keyID(publicJwk.computeThumbprint().toString())
-                    .build();
+            String keyId = publicJwk.computeThumbprint().toString();
+            return new RSAKey.Builder(publicKey).privateKey(privateKey).keyID(keyId).build();
         } catch (JOSEException e) {
             throw new IllegalStateException("Failed to compute JWT key id", e);
         }
@@ -107,7 +116,9 @@ public class SecurityConfig {
     @Bean
     public JwtDecoder jwtDecoder(RSAKey rsaKey) {
         try {
-            return NimbusJwtDecoder.withPublicKey(rsaKey.toRSAPublicKey()).build();
+            NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(rsaKey.toRSAPublicKey()).build();
+            decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(TOKEN_ISSUER));
+            return decoder;
         } catch (JOSEException e) {
             throw new IllegalStateException("Failed to build NimbusJwtDecoder", e);
         }

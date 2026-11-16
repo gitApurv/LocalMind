@@ -6,8 +6,10 @@ import com.localmind.tools.config.WebScraperProperties;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -18,6 +20,8 @@ class WebScraperToolsTest {
     private WebScraperTools scraperTools;
     private HttpServer testServer;
     private String serverBaseUrl;
+    private int serverPort;
+    private final AtomicInteger secretHits = new AtomicInteger();
 
     @BeforeEach
     void setUp() throws IOException {
@@ -64,13 +68,30 @@ class WebScraperToolsTest {
             }
         });
 
+        testServer.createContext("/secret", exchange -> {
+            secretHits.incrementAndGet();
+            byte[] bytes = "<html><body>internal secret</body></html>".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
+        testServer.createContext("/document.pdf", exchange -> {
+            byte[] bytes = "%PDF-1.7".getBytes(StandardCharsets.US_ASCII);
+            exchange.getResponseHeaders().set("Content-Type", "application/pdf");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
         testServer.createContext("/redirect-to-article", exchange -> redirect(exchange, "/article"));
         testServer.createContext("/redirect-to-private",
                 exchange -> redirect(exchange, "http://10.0.0.1/admin"));
         testServer.createContext("/redirect-loop", exchange -> redirect(exchange, "/redirect-loop"));
         testServer.start();
-        int port = testServer.getAddress().getPort();
-        serverBaseUrl = "http://127.0.0.1:" + port;
+        serverPort = testServer.getAddress().getPort();
+        serverBaseUrl = "http://127.0.0.1:" + serverPort;
     }
 
     @AfterEach
@@ -87,7 +108,7 @@ class WebScraperToolsTest {
         assertNotNull(content);
         assertTrue(content.contains("LocalMind AI Release"));
         assertTrue(content.contains("LocalMind is an open-source, privacy-first conversational AI platform."));
-        // Scripts, styles, nav, footer should be removed
+        // Scripts, styles, nav, footer should be removed.
         assertFalse(content.contains("console.log"));
         assertFalse(content.contains("font-family"));
         assertFalse(content.contains("Copyright 2026"));
@@ -203,6 +224,66 @@ class WebScraperToolsTest {
         assertTrue(WebScraperTools.isRestrictedAddress(java.net.InetAddress.getByName("224.0.0.1")));
         assertTrue(WebScraperTools.isRestrictedAddress(java.net.InetAddress.getByName("::ffff:10.0.0.1")));
         assertFalse(WebScraperTools.isRestrictedAddress(java.net.InetAddress.getByName("93.184.216.34")));
+    }
+
+    @Test
+    @DisplayName("readWebPage() should connect only to the addresses its SSRF check approved (DNS rebinding)")
+    void connectsOnlyToCheckedAddresses() {
+        // 127.0.0.1 (the test server) plays the private target; ::1 plays a public address with nothing listening.
+        // A rebinding DNS server answers the first lookup with the allowed address and later ones with the target.
+        AtomicInteger lookups = new AtomicInteger();
+        WebScraperTools guarded = new WebScraperTools(new WebScraperProperties(false),
+                address -> address.getHostAddress().equals("127.0.0.1"),
+                host -> lookups.incrementAndGet() == 1
+                        ? new InetAddress[]{InetAddress.getByName("::1")}
+                        : new InetAddress[]{InetAddress.getByName("127.0.0.1")});
+
+        String result = guarded.readWebPage("http://rebind.test:" + serverPort + "/secret");
+
+        assertEquals(1, lookups.get(), "the checked lookup must be the only one");
+        assertEquals(0, secretHits.get(), "the private target must never be reached");
+        assertFalse(result.contains("internal secret"));
+    }
+
+    @Test
+    @DisplayName("readWebPage() should block a host when any of its addresses is private")
+    void blocksHostWithAnyPrivateAddress() {
+        WebScraperTools guarded = new WebScraperTools(new WebScraperProperties(false),
+                WebScraperTools::isRestrictedAddress, host -> new InetAddress[]{
+                        InetAddress.getByName("93.184.216.34"), InetAddress.getByName("10.0.0.1")});
+
+        assertTrue(guarded.readWebPage("http://mixed.test/page").contains("SSRF protection"));
+    }
+
+    @Test
+    @DisplayName("readWebPage() should connect through the guarded resolver's answer, not a second DNS lookup")
+    void connectsThroughGuardedResolver() {
+        WebScraperTools guarded = new WebScraperTools(new WebScraperProperties(false),
+                address -> !address.isLoopbackAddress() && WebScraperTools.isRestrictedAddress(address),
+                host -> new InetAddress[]{InetAddress.getByName("127.0.0.1")});
+
+        String content = guarded.readWebPage("http://scraper.test:" + serverPort + "/article");
+
+        assertTrue(content.contains("LocalMind AI Release"));
+    }
+
+    @Test
+    @DisplayName("readWebPage() should report non-text content such as PDF instead of parsing it")
+    void rejectsNonTextContent() {
+        String result = scraperTools.readWebPage(serverBaseUrl + "/document.pdf");
+
+        assertTrue(result.contains("not a readable text or HTML page"));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0} restricted = {1}")
+    @org.junit.jupiter.params.provider.CsvSource({"192.0.0.8, true", "198.18.0.1, true", "198.19.255.255, true",
+            "240.0.0.1, true", "255.255.255.255, true", "64:ff9b::a00:1, true", "64:ff9b::808:808, false",
+            "64:ff9b:1::1, true", "2002:a00:1::1, true", "2002:808:808::1, false", "2001:0:4136:e378::1, true",
+            "::a00:1, true", "::ffff:808:808, false", "198.20.0.1, false", "192.0.2.1, false",
+            "2606:4700::1111, false"})
+    @DisplayName("isRestrictedAddress() should cover special-purpose IPv4 ranges and IPv6 forms that embed IPv4")
+    void restrictsSpecialPurposeAndEmbeddedRanges(String address, boolean restricted) throws Exception {
+        assertEquals(restricted, WebScraperTools.isRestrictedAddress(InetAddress.getByName(address)));
     }
 
     private static void redirect(com.sun.net.httpserver.HttpExchange exchange, String location) throws IOException {
