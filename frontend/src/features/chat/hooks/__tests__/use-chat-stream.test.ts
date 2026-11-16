@@ -263,6 +263,44 @@ describe("useChatStream", () => {
     expect(lastMsg.error).toBe(true);
   });
 
+  it("keeps the warning bubble after a failed turn instead of reloading the thread", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: createSseStream([
+        'data: {"type":"ERROR","content":"Failed to start the response. Please try again."}\n\n',
+      ]),
+    } as unknown as Response);
+    const listMessages = vi
+      .spyOn(apiClient, "get")
+      .mockResolvedValue([aMessage({ id: "m-1", conversationId: "c-123", content: "Hi" })]);
+
+    const { result } = renderHook(() => useChatStream());
+    await act(async () => {
+      await result.current.sendMessage("Hi");
+    });
+
+    expect(listMessages).not.toHaveBeenCalled();
+    const messages = useChatStore.getState().messages;
+    expect(messages).toHaveLength(2);
+    expect(messages[1].error).toBe(true);
+    expect(messages[1].content).toBe("⚠️ Failed to start the response. Please try again.");
+  });
+
+  it("reloads the thread from the server after a successful turn", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: createSseStream(['data: {"type":"DONE","messageId":"msg-1"}\n\n']),
+    } as unknown as Response);
+    const listMessages = vi.spyOn(apiClient, "get").mockResolvedValue([]);
+
+    const { result } = renderHook(() => useChatStream());
+    await act(async () => {
+      await result.current.sendMessage("Hi");
+    });
+
+    expect(listMessages).toHaveBeenCalledTimes(1);
+  });
+
   it("should automatically create conversation when activeConversationId is null", async () => {
     useConversationStore.setState({ activeConversationId: null, conversations: [] });
 

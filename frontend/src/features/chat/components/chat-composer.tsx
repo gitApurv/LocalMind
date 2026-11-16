@@ -44,12 +44,6 @@ export function ChatComposer({
 
   const [isCustomModalOpen, setIsCustomModalOpen] = React.useState(false);
   const [customDraft, setCustomDraft] = React.useState(customPersonaPrompt);
-  const [mounted, setMounted] = React.useState(false);
-
-  React.useEffect(() => {
-    setMounted(true);
-  }, []);
-
   React.useLayoutEffect(() => {
     const textarea = inputRef.current;
     if (!textarea) return;
@@ -175,9 +169,8 @@ export function ChatComposer({
         </div>
       </div>
 
-      {/* Custom Persona Modal */}
+      {/* Opened only by a click, so the portal never renders on the server. */}
       {isCustomModalOpen &&
-        mounted &&
         createPortal(
           <div
             role="dialog"

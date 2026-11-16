@@ -16,12 +16,15 @@ export function ReasoningAccordion({
   isStreaming = false,
 }: ReasoningAccordionProps) {
   const [isOpen, setIsOpen] = React.useState(isStreaming);
+  const [wasStreaming, setWasStreaming] = React.useState(isStreaming);
 
-  React.useEffect(() => {
+  // Adjusting state during render (not in an effect) opens the trace before the first paint.
+  if (isStreaming !== wasStreaming) {
+    setWasStreaming(isStreaming);
     if (isStreaming) {
       setIsOpen(true);
     }
-  }, [isStreaming]);
+  }
 
   if (!content && !isStreaming) return null;
 

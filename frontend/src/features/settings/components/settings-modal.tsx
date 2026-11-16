@@ -15,27 +15,25 @@ export interface SettingsModalProps {
 
 /** Profile dialog: full name and the custom instructions injected into every prompt. */
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
+  // The dialog unmounts when closed, so its form starts from the saved profile on every open.
+  if (!isOpen) {
+    return null;
+  }
+  return <SettingsDialog onClose={onClose} />;
+}
+
+function SettingsDialog({ onClose }: Pick<SettingsModalProps, "onClose">) {
   const user = useAuthStore((s) => s.user);
   const updateProfile = useAuthStore((s) => s.updateProfile);
 
-  const [fullName, setFullName] = React.useState("");
-  const [customInstructions, setCustomInstructions] = React.useState("");
+  const [fullName, setFullName] = React.useState(user?.fullName || "");
+  const [customInstructions, setCustomInstructions] = React.useState(
+    user?.customInstructions || ""
+  );
   const [isSaving, setIsSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  // Start from the saved profile each time the dialog opens.
   React.useEffect(() => {
-    if (isOpen) {
-      setFullName(user?.fullName || "");
-      setCustomInstructions(user?.customInstructions || "");
-      setError(null);
-      setIsSaving(false);
-    }
-  }, [isOpen, user]);
-
-  React.useEffect(() => {
-    if (!isOpen) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         onClose();
@@ -44,11 +42,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
-
-  if (!isOpen) {
-    return null;
-  }
+  }, [onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

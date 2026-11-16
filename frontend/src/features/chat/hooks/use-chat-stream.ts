@@ -13,6 +13,7 @@ const TITLE_REFRESH_DELAY_MS = 1500;
 
 interface StreamSession {
   reasoningStartedAt: number | null;
+  failed: boolean;
   reportError: (message: string) => void;
 }
 
@@ -49,7 +50,9 @@ export function useChatStream() {
     const signal = chat.startStream();
     const session: StreamSession = {
       reasoningStartedAt: null,
+      failed: false,
       reportError: (message) => {
+        session.failed = true;
         setError(message);
         useChatStore.getState().failLastMessage(message);
       },
@@ -79,7 +82,9 @@ export function useChatStream() {
     } finally {
       useChatStore.getState().finishStream(signal);
       scheduleTitleRefresh(conversationId);
-      if (!signal.aborted) {
+      // A failed turn stores no reply, so reloading from the server would replace the warning
+      // bubble with a bare, unanswered question.
+      if (!signal.aborted && !session.failed) {
         void useChatStore.getState().refreshMessages(conversationId);
       }
     }

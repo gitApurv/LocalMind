@@ -46,4 +46,16 @@ describe("ReasoningAccordion", () => {
     fireEvent.click(summary!);
     expect(details).toBeDefined();
   });
+
+  it("opens itself when reasoning starts streaming", () => {
+    const { container, rerender } = render(
+      <ReasoningAccordion content="Earlier thoughts." isStreaming={false} />
+    );
+    const details = container.querySelector("details")!;
+    expect(details.open).toBe(false);
+
+    rerender(<ReasoningAccordion content="Earlier thoughts." isStreaming={true} />);
+
+    expect(details.open).toBe(true);
+  });
 });

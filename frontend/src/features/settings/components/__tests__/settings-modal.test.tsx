@@ -48,6 +48,19 @@ describe("SettingsModal", () => {
     expect(instructionsInput).toBeDefined();
   });
 
+  it("discards unsaved edits when the dialog is closed and reopened", () => {
+    const { rerender } = render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
+    fireEvent.change(screen.getByDisplayValue("Alice Sovereign"), {
+      target: { value: "Unsaved Name" },
+    });
+
+    rerender(<SettingsModal isOpen={false} onClose={mockOnClose} />);
+    rerender(<SettingsModal isOpen={true} onClose={mockOnClose} />);
+
+    expect(screen.getByDisplayValue("Alice Sovereign")).toBeDefined();
+    expect(screen.queryByDisplayValue("Unsaved Name")).toBeNull();
+  });
+
   it("submitting the form calls updateProfile and closes the modal", async () => {
     const updateProfileMock = vi.fn().mockResolvedValue(undefined);
     useAuthStore.setState({ updateProfile: updateProfileMock });
