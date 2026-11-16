@@ -26,11 +26,14 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.function.SingletonSupplier;
 
 @Service
 @RequiredArgsConstructor
@@ -49,6 +52,11 @@ public class AuthService {
     private final JwtService jwtService;
     private final JwtProperties jwtProperties;
     private final SecureRandom secureRandom = new SecureRandom();
+    /**
+     * Hash checked when the email is unknown, so that case takes as long as a wrong password and response times do not
+     * reveal which emails are registered. Created on first use with the configured encoder.
+     */
+    private final SingletonSupplier<String> unknownUserHash = SingletonSupplier.of(this::newUnknownUserHash);
 
     @Transactional
     public UserSummary register(RegisterRequest request) {
@@ -59,10 +67,12 @@ public class AuthService {
         if (userRepository.existsByEmail(email)) {
             throw new ConflictException("Email is already registered");
         }
-        User user = User.builder().email(email).passwordHash(passwordEncoder.encode(request.password()))
-                .fullName(request.fullName().trim()).build();
+        String passwordHash = passwordEncoder.encode(request.password());
+        String fullName = request.fullName().trim();
+        User user = User.builder().email(email).passwordHash(passwordHash).fullName(fullName).build();
         try {
-            return UserSummary.from(userRepository.saveAndFlush(user));
+            User saved = userRepository.saveAndFlush(user);
+            return UserSummary.from(saved);
         } catch (DataIntegrityViolationException e) {
             // A concurrent registration with the same email won the race on the unique index.
             throw new ConflictException("Email is already registered", e);
@@ -71,7 +81,8 @@ public class AuthService {
 
     @Transactional(readOnly = true)
     public UserSummary getCurrentUser(String userId) {
-        return UserSummary.from(findUser(userId));
+        User user = findUser(userId);
+        return UserSummary.from(user);
     }
 
     @Transactional
@@ -83,18 +94,24 @@ public class AuthService {
         if (request.customInstructions() != null) {
             user.setCustomInstructions(request.customInstructions().trim());
         }
-        return UserSummary.from(userRepository.save(user));
+        User saved = userRepository.save(user);
+        return UserSummary.from(saved);
     }
 
     @Transactional
     public LoginResult login(LoginRequest request) {
-        User user = userRepository.findByEmail(normalizeEmail(request.email()))
-                .filter(candidate -> passwordEncoder.matches(request.password(), candidate.getPasswordHash()))
+        String email = normalizeEmail(request.email());
+        Optional<User> candidate = userRepository.findByEmail(email);
+        String hash = candidate.map(User::getPasswordHash).orElseGet(unknownUserHash);
+        boolean passwordMatches = passwordEncoder.matches(request.password(), hash);
+        User user = candidate.filter(found -> passwordMatches)
                 .orElseThrow(() -> new UnauthorizedException(INVALID_CREDENTIALS));
 
         String rawRefreshToken = issueRefreshToken(user);
-        AuthResponse response = new AuthResponse(jwtService.generateAccessToken(user), TOKEN_TYPE,
-                accessTokenTtlSeconds(), UserSummary.from(user));
+        String accessToken = jwtService.generateAccessToken(user);
+        long ttlSeconds = accessTokenTtlSeconds();
+        UserSummary summary = UserSummary.from(user);
+        AuthResponse response = new AuthResponse(accessToken, TOKEN_TYPE, ttlSeconds, summary);
         return new LoginResult(response, rawRefreshToken);
     }
 
@@ -108,7 +125,8 @@ public class AuthService {
         if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
             throw new UnauthorizedException("Missing refresh token cookie");
         }
-        RefreshToken storedToken = refreshTokenRepository.findByTokenHashForUpdate(hashToken(rawRefreshToken))
+        String tokenHash = hashToken(rawRefreshToken);
+        RefreshToken storedToken = refreshTokenRepository.findByTokenHashForUpdate(tokenHash)
                 .orElseThrow(() -> new UnauthorizedException("Invalid refresh token"));
 
         Instant now = Instant.now();
@@ -127,8 +145,9 @@ public class AuthService {
         User user = userRepository.findById(storedToken.getUserId())
                 .orElseThrow(() -> new UnauthorizedException("User not found"));
         String newRawRefreshToken = issueRefreshToken(user);
-        RefreshTokenResponse response = new RefreshTokenResponse(jwtService.generateAccessToken(user), TOKEN_TYPE,
-                accessTokenTtlSeconds());
+        String accessToken = jwtService.generateAccessToken(user);
+        long ttlSeconds = accessTokenTtlSeconds();
+        RefreshTokenResponse response = new RefreshTokenResponse(accessToken, TOKEN_TYPE, ttlSeconds);
         return new RefreshResult(response, newRawRefreshToken);
     }
 
@@ -137,23 +156,27 @@ public class AuthService {
         if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
             return;
         }
-        refreshTokenRepository.findByTokenHash(hashToken(rawRefreshToken)).ifPresent(token -> {
-            token.setRevoked(true);
-            refreshTokenRepository.save(token);
-        });
+        String tokenHash = hashToken(rawRefreshToken);
+        // Deleted, not revoked: replaying a revoked token counts as theft and would end every session of the user.
+        refreshTokenRepository.findByTokenHash(tokenHash).ifPresent(refreshTokenRepository::delete);
+    }
+
+    private String newUnknownUserHash() {
+        return passwordEncoder.encode(UUID.randomUUID().toString());
     }
 
     private User findUser(String userId) {
         return userRepository.findById(userId).orElseThrow(() -> new ResourceNotFoundException("User not found"));
     }
 
-    /**
-     * Persists only the hash of a fresh refresh token and returns the raw value.
-     */
+    /** Persists only the hash of a fresh refresh token and returns the raw value. */
     private String issueRefreshToken(User user) {
         String rawToken = generateSecureToken();
-        refreshTokenRepository.save(RefreshToken.builder().userId(user.getId()).tokenHash(hashToken(rawToken))
-                .expiresAt(Instant.now().plus(jwtProperties.refreshTokenExpiration())).revoked(false).build());
+        String tokenHash = hashToken(rawToken);
+        Instant expiresAt = Instant.now().plus(jwtProperties.refreshTokenExpiration());
+        RefreshToken token = RefreshToken.builder().userId(user.getId()).tokenHash(tokenHash).expiresAt(expiresAt)
+                .revoked(false).build();
+        refreshTokenRepository.save(token);
         return rawToken;
     }
 
@@ -173,7 +196,8 @@ public class AuthService {
 
     private static String hashToken(String rawToken) {
         try {
-            byte[] hash = MessageDigest.getInstance("SHA-256").digest(rawToken.getBytes(StandardCharsets.UTF_8));
+            byte[] tokenBytes = rawToken.getBytes(StandardCharsets.UTF_8);
+            byte[] hash = MessageDigest.getInstance("SHA-256").digest(tokenBytes);
             return HexFormat.of().formatHex(hash);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 algorithm not available", e);

@@ -6,9 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Component;
 
-/**
- * Builds the HTTP-only cookie that carries the refresh token, scoped to the auth endpoints.
- */
+/** Builds the HTTP-only cookie that carries the refresh token, scoped to the auth endpoints. */
 @Component
 @RequiredArgsConstructor
 public class RefreshTokenCookieFactory {

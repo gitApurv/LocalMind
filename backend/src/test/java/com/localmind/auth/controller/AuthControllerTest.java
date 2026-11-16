@@ -11,6 +11,7 @@ import com.localmind.auth.dto.LoginRequest;
 import com.localmind.auth.dto.RegisterRequest;
 import com.localmind.auth.dto.UpdateProfileRequest;
 import com.localmind.auth.repository.RefreshTokenRepository;
+import com.localmind.auth.service.RefreshTokenCleanupService;
 import com.localmind.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -19,6 +20,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -40,6 +44,12 @@ class AuthControllerTest {
 
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
+    private RefreshTokenCleanupService refreshTokenCleanupService;
+
+    @Autowired
+    private JwtEncoder jwtEncoder;
 
     @BeforeEach
     void setUp() {
@@ -206,7 +216,6 @@ class AuthControllerTest {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.fullName", is("New Name")))
                 .andExpect(jsonPath("$.customInstructions", is("Always answer in concise bullet points.")));
 
-        // Verify GET /api/auth/me also returns the updated values
         mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + accessToken)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.fullName", is("New Name")))
                 .andExpect(jsonPath("$.customInstructions", is("Always answer in concise bullet points.")));
@@ -226,16 +235,15 @@ class AuthControllerTest {
         jakarta.servlet.http.Cookie initialCookie = loginResult.getResponse().getCookie("refreshToken");
         assertNotNull(initialCookie);
 
-        // First refresh: valid, rotates token
+        // First refresh: valid, rotates token.
         MvcResult firstRefresh = mockMvc.perform(post("/api/auth/refresh").cookie(initialCookie))
                 .andExpect(status().isOk()).andReturn();
 
-        // Age the rotation past the grace window, then replay the SAME old token: reuse attack!
+        // Age the rotation past the grace window, then replay the old token (reuse).
         ageRotations();
         mockMvc.perform(post("/api/auth/refresh").cookie(initialCookie)).andExpect(status().isUnauthorized());
 
-        // Token family compromised: the rotated new cookie should also now be
-        // deleted/invalidated
+        // Reuse revokes the whole token family, including the freshly rotated token.
         jakarta.servlet.http.Cookie rotatedCookie = firstRefresh.getResponse().getCookie("refreshToken");
         mockMvc.perform(post("/api/auth/refresh").cookie(rotatedCookie)).andExpect(status().isUnauthorized());
     }
@@ -257,12 +265,23 @@ class AuthControllerTest {
     }
 
     @Test
-    @DisplayName("POST /api/auth/refresh with a logged-out token should be rejected without a grace window")
+    @DisplayName("POST /api/auth/refresh with a logged-out token should be rejected without ending other sessions")
     void refreshAfterLogoutRejected() throws Exception {
         jakarta.servlet.http.Cookie cookie = registerAndLogin("loggedout@localmind.ai");
+        jakarta.servlet.http.Cookie otherSession = login("loggedout@localmind.ai");
 
         mockMvc.perform(post("/api/auth/logout").cookie(cookie)).andExpect(status().isNoContent());
-        mockMvc.perform(post("/api/auth/refresh").cookie(cookie)).andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/auth/refresh").cookie(cookie)).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message", is("Invalid refresh token")));
+
+        mockMvc.perform(post("/api/auth/refresh").cookie(otherSession)).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /api/auth/me without a token should return 401 Unauthorized")
+    void getCurrentUserWithoutTokenRejected() throws Exception {
+        mockMvc.perform(get("/api/auth/me")).andExpect(status().isUnauthorized())
+                .andExpect(header().exists("WWW-Authenticate"));
     }
 
     @Test
@@ -291,10 +310,67 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.message", containsString("fullName")));
     }
 
+    @Test
+    @DisplayName("Expired-token cleanup keeps live sessions and still detects reuse of a rotated token")
+    void cleanupKeepsReuseDetection() throws Exception {
+        jakarta.servlet.http.Cookie initialCookie = registerAndLogin("cleanup@localmind.ai");
+        MvcResult refreshed = mockMvc.perform(post("/api/auth/refresh").cookie(initialCookie))
+                .andExpect(status().isOk()).andReturn();
+        jakarta.servlet.http.Cookie rotatedCookie = refreshed.getResponse().getCookie("refreshToken");
+
+        assertEquals(0, refreshTokenCleanupService.deleteExpiredTokens());
+
+        ageRotations();
+        mockMvc.perform(post("/api/auth/refresh").cookie(initialCookie)).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message", is("Refresh token reuse detected: session terminated")));
+        mockMvc.perform(post("/api/auth/refresh").cookie(rotatedCookie)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("A token signed with LocalMind's key but issued by someone else should be rejected with 401")
+    void tokenFromOtherIssuerRejected() throws Exception {
+        java.time.Instant now = java.time.Instant.now();
+        JwtClaimsSet claims = JwtClaimsSet.builder().issuer("someone-else").issuedAt(now)
+                .expiresAt(now.plusSeconds(300)).subject("u1").claim("userId", "u1").build();
+        String token = jwtEncoder.encode(JwtEncoderParameters.from(claims)).getTokenValue();
+
+        mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("POST /api/auth/login should scope the refresh cookie to /api/auth with HttpOnly and SameSite=Strict")
+    void refreshCookieAttributes() throws Exception {
+        mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(new RegisterRequest("cookie@localmind.ai", "password123",
+                        "Cookie User"))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(new LoginRequest("cookie@localmind.ai", "password123"))))
+                .andExpect(status().isOk()).andExpect(cookie().path("refreshToken", "/api/auth"))
+                .andExpect(cookie().httpOnly("refreshToken", true))
+                .andExpect(cookie().sameSite("refreshToken", "Strict"));
+    }
+
+    @Test
+    @DisplayName("POST /api/auth/register should reject a password over 72 UTF-8 bytes even if under 72 characters")
+    void registerPasswordOver72BytesRejected() throws Exception {
+        RegisterRequest request = new RegisterRequest("bytes@localmind.ai", "\u00e9".repeat(40), "Bytes User");
+
+        mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request))).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", is("Password must not exceed 72 bytes")));
+    }
+
     private jakarta.servlet.http.Cookie registerAndLogin(String email) throws Exception {
         mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(new RegisterRequest(email, "password123", "Tab User"))))
                 .andExpect(status().isCreated());
+        return login(email);
+    }
+
+    private jakarta.servlet.http.Cookie login(String email) throws Exception {
         MvcResult login = mockMvc
                 .perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new LoginRequest(email, "password123"))))

@@ -3,6 +3,7 @@ package com.localmind.auth.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import java.time.Duration;
@@ -15,7 +16,11 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "refresh_tokens")
+@Table(name = "refresh_tokens", indexes = {
+        // Reuse detection deletes every token of the user.
+        @Index(name = "idx_refresh_tokens_user", columnList = "user_id"),
+        // The hourly cleanup deletes expired tokens.
+        @Index(name = "idx_refresh_tokens_expires", columnList = "expires_at")})
 @Getter
 @Setter
 @NoArgsConstructor

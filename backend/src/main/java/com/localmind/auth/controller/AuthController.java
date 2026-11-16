@@ -54,21 +54,24 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
         LoginResult result = authService.login(request);
-        return withCookie(cookieFactory.create(result.rawRefreshToken())).body(result.authResponse());
+        ResponseCookie cookie = cookieFactory.create(result.rawRefreshToken());
+        return withCookie(cookie).body(result.authResponse());
     }
 
     @PostMapping("/refresh")
     public ResponseEntity<RefreshTokenResponse> refresh(
             @CookieValue(name = RefreshTokenCookieFactory.COOKIE_NAME, required = false) String rawRefreshToken) {
         RefreshResult result = authService.refresh(rawRefreshToken);
-        return withCookie(cookieFactory.create(result.rawRefreshToken())).body(result.tokenResponse());
+        ResponseCookie cookie = cookieFactory.create(result.rawRefreshToken());
+        return withCookie(cookie).body(result.tokenResponse());
     }
 
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(
             @CookieValue(name = RefreshTokenCookieFactory.COOKIE_NAME, required = false) String rawRefreshToken) {
         authService.logout(rawRefreshToken);
-        return ResponseEntity.noContent().header(HttpHeaders.SET_COOKIE, cookieFactory.expire().toString()).build();
+        String expiredCookie = cookieFactory.expire().toString();
+        return ResponseEntity.noContent().header(HttpHeaders.SET_COOKIE, expiredCookie).build();
     }
 
     private static ResponseEntity.BodyBuilder withCookie(ResponseCookie cookie) {
