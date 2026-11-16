@@ -63,7 +63,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     subgraph ClientTier["Presentation Tier (Port 3000)"]
-        Browser["Next.js 15 Client
+        Browser["Next.js 16 Client
         - React 19 App Router
         - Feature folders (auth, chat, conversations, ...)
         - Zustand stores, SSE stream parser

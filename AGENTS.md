@@ -113,7 +113,7 @@ com.localmind
   - `localmind.tools.searxng` / `localmind.tools.scraper` → `tools.config.SearxngProperties` / `tools.config.WebScraperProperties`
 - Externalised values use environment-variable placeholders with a working local default: `${VAR:default}` in `application.yml`, `${VAR:-default}` in `docker/docker-compose.yml`. The backend and compose share variable names (`MYSQL_PASSWORD`, `QDRANT_GRPC_PORT`, ...), and every compose variable is listed in `docker/.env.example`. When a `localmind.*` key mirrors a Spring key (e.g. `localmind.llm.ollama-base-url` and `spring.ai.ollama.base-url`), both use the same variable so one override changes both. Never commit real secrets; `.env` files are git-ignored.
 - Docker images are pinned to an explicit version (`mysql:8.4`, `qdrant/qdrant:v1.20.1`, `searxng/searxng:<date>-<sha>`), never `latest`, so every machine runs the same stack and database volumes are never upgraded implicitly. Bump a version deliberately via its `*_IMAGE_TAG` default and `docker/.env.example`.
-- Never customize the shared `RestClient.Builder` (no `RestClientCustomizer`, no `RestClient.Builder` bean): Spring AI builds its Ollama client from it, and embeddings or completions on slow hardware need long timeouts. LocalMind's own short HTTP calls inject the `shortTimeoutRestClient` bean from `WebMvcConfig`.
+- Never customize the shared `RestClient.Builder` (no `RestClientCustomizer`, no `RestClient.Builder` bean): Spring AI builds its Ollama client from it, and embeddings or completions on slow hardware need long timeouts. LocalMind's own short HTTP calls inject the `shortTimeoutRestClient` bean from `WebMvcConfig`. `spring.http.clients.imperative.factory: reactor` keeps that builder on Reactor Netty even though `httpclient5` is on the classpath (`SharedHttpClientFactoryTest`).
 - `spring.main.allow-bean-definition-overriding` stays off; a duplicate bean is a bug to fix, not to hide.
 - The JWT signing key lives in `localmind.jwt.key-file` (generated on first start, git-ignored under `backend/data/`) so tokens survive restarts. Only `/actuator/health` is public.
 - Use Jackson 3 (`tools.jackson.databind.*`) for data binding; the annotations stay in `com.fasterxml.jackson.annotation`. Prefer typed `RestClient#body(SomeRecord.class)` over manual `ObjectMapper` parsing.
@@ -128,8 +128,8 @@ com.localmind
   - 401/403 raised by the security filter chain are written by `ProblemDetailSecurityHandler`;
   - anything unexpected becomes a 500 with a generic message.
 - Never send exception text (`e.getMessage()`) to a client, an SSE `ERROR` event, a stored status message or a tool result: log the details and return a fixed, user-facing message.
-- Tools and advisors never throw into the LLM pipeline: they log and return a readable error string (tools) or the unmodified request (advisors).
-- Outbound fetches of model-chosen URLs validate every hop: no automatic redirects, each target re-checked against loopback, private, link-local, CGNAT, IPv6 unique-local and multicast ranges (`WebScraperTools`).
+- Tools and advisors never throw into the LLM pipeline: they log and return a readable error string (tools) or the unmodified request (advisors). Prompt advisors implement `PromptAdvisor#apply`, never `before`: the interface's `before` enforces this for every advisor.
+- Outbound fetches of model-chosen URLs validate every hop: no automatic redirects, each target re-checked against loopback, private, link-local, CGNAT, IPv6 unique-local and multicast ranges (`WebScraperTools`). The check lives in the HTTP client's DNS resolver, so the connection uses exactly the addresses that were checked; never validate a host and then let a library resolve it again (DNS rebinding).
 
 ### 6. Code style
 
@@ -141,11 +141,18 @@ com.localmind
 
 ### 7. Tests
 
-- Unit tests construct the class under test directly with mocks (`Mockito`) and real records for properties. Never let a unit test depend on a service that may or may not run on the machine (use test doubles such as `support/OfflineModelCatalog`).
+- Unit tests construct the class under test directly with mocks (`Mockito`) and real records for properties. Build default properties with `support/TestProperties` (`llmDefaults()`, `promptDefaults()`, `fileStorage(dir)`); production records carry no test-only factories. Never let a unit test depend on a service that may or may not run on the machine (use test doubles such as `support/OfflineModelCatalog`).
 - `@SpringBootTest` and `@WebMvcTest` classes use `@ActiveProfiles("test")`: `src/test/resources/application-test.yml` runs the context on in-memory H2 with no MySQL, Qdrant or Ollama.
 - Tests that need the real stack are tagged `@Tag("live")` and gated with `@EnabledIfEnvironmentVariable(named = "LOCALMIND_LIVE_TESTS", matches = "true")`.
 - Web tests use `MockMvc` with `SecurityMockMvcRequestPostProcessors.jwt()`.
 - Every behaviour change ships with a test; `./mvnw verify` (tests + Spotless check) must pass before committing, with no infrastructure running.
+
+### 8. Documentation
+
+- `docs/backend/` documents what the backend does today: one page per feature under `features/` (same sections on every page), plus cross-cutting pages (`api.md`, `configuration.md`, `data-model.md`, `errors.md`, `security.md`) and `flows/`.
+- Every behaviour change updates the matching pages in the same commit: endpoints, DTOs, columns, `localmind.*` keys, exceptions and user-facing messages, advisors and tools. `docs/backend/README.md` maps each kind of change to the pages to update.
+- A new feature package gets a new `features/<feature>.md` with the same sections, linked from `docs/backend/README.md` and `architecture.md`.
+- Document the code, not the intent: when code and docs disagree, fix whichever is wrong in the same change.
 
 ## Frontend Coding Pattern (Next.js, `frontend/`)
 

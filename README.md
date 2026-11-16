@@ -18,7 +18,7 @@ For the detailed design see [`docs/DESIGN.md`](docs/DESIGN.md); for how prompts 
 ```mermaid
 flowchart TD
     subgraph Client["Presentation Tier (Port 3000)"]
-        UI["Next.js 15 + React 19 + Tailwind CSS"]
+        UI["Next.js 16 + React 19 + Tailwind CSS"]
         State["Feature folders with Zustand stores<br/>(auth, conversations, chat, models)"]
         SSEHook["SSE stream hook"]
         Proxy["Same-origin /api rewrite"]
@@ -113,8 +113,8 @@ flowchart TD
 | :-------------------------- | :------------------------ | :--------------------------------------------- |
 | **Docker Desktop / Engine** | 24.0+                     | Docker Compose v2; runs MySQL, Qdrant, SearXNG |
 | **Java JDK**                | 25                        | Spring Boot backend                            |
-| **Node.js**                 | 18.18+ (tested on 20, 22) | Next.js 15 frontend                            |
-| **Ollama**                  | Recent release            | Runs natively at `http://127.0.0.1:11434`      |
+| **Node.js**                 | 20.9+ (tested on 22)      | Next.js 16 frontend                            |
+| **Ollama**                  | 0.30.0+                   | Runs natively at `http://127.0.0.1:11434`      |
 
 ---
 
@@ -160,7 +160,7 @@ ollama pull gemma3:1b
 ollama pull nomic-embed-text
 ```
 
-LocalMind validates on server startup that the required chat model (`gemma3:1b`) and embedding model (`nomic-embed-text`) are installed in Ollama (`VALIDATE_MODELS_ON_STARTUP=true`), preventing startup if they are missing. Pull a tool-capable model such as `qwen2.5:7b` as well if you want the assistant to use tools.
+LocalMind validates on server startup that the required chat model (`gemma3:1b`) and embedding model (`nomic-embed-text`) are installed in Ollama (`VALIDATE_MODELS_ON_STARTUP=true`), preventing startup if they are missing. It also requires Ollama 0.30.0 or later: older releases do not report which models support tools, so tools would silently never be offered. Pull a tool-capable model such as `qwen2.5:7b` as well if you want the assistant to use tools.
 
 ### 3. Run the Backend (Spring Boot)
 
@@ -199,7 +199,7 @@ Every setting uses a `${VARIABLE:default}` placeholder in `backend/src/main/reso
 | `OLLAMA_BASE_URL`              | `http://127.0.0.1:11434`                      | backend          | Ollama API endpoint                                                                     |
 | `OLLAMA_CHAT_MODEL`            | `gemma3:1b`                                   | backend          | Default chat model                                                                      |
 | `OLLAMA_EMBEDDING_MODEL`       | `nomic-embed-text`                            | backend          | Embedding model                                                                         |
-| `VALIDATE_MODELS_ON_STARTUP`   | `true`                                        | backend          | Verify required chat and embedding models in Ollama on startup                          |
+| `VALIDATE_MODELS_ON_STARTUP`   | `true`                                        | backend          | Verify Ollama 0.30.0+ and the required chat and embedding models on startup             |
 | `QDRANT_HOST`                  | `127.0.0.1`                                   | backend          | Qdrant host                                                                             |
 | `QDRANT_GRPC_PORT`             | `6334`                                        | backend, compose | Qdrant gRPC port                                                                        |
 | `QDRANT_HTTP_PORT`             | `6333`                                        | compose          | Qdrant HTTP port                                                                        |
@@ -249,7 +249,7 @@ All endpoints except registration, login, refresh, logout and `/actuator/health`
 ### Attachments & RAG (`/api/conversations/{conversationId}/attachments`)
 
 - `POST /api/conversations/{conversationId}/attachments` — Upload a document (`.pdf`, `.docx`, `.txt`, `.md`, multipart/form-data); returns `202 Accepted` while it is indexed in the background.
-- `GET /api/conversations/{conversationId}/attachments` — List attachments and their status (`PENDING`, `PROCESSING`, `READY`, `FAILED`).
+- `GET /api/conversations/{conversationId}/attachments` — List attachments and their status (`PROCESSING`, `READY` or `FAILED`; an attachment still processing when the backend restarts is marked `FAILED` at startup).
 - `GET /api/conversations/{conversationId}/attachments/{attachmentId}/download` — Download the original file.
 
 ### Memories (`/api/memories`)
@@ -260,7 +260,7 @@ All endpoints except registration, login, refresh, logout and `/actuator/health`
 
 ### Models (`/api/models`)
 
-- `GET /api/models` — Installed Ollama models, each with `supportsTools`, along with the configured `defaultModel`.
+- `GET /api/models` — Installed chat models (embedding-only models are left out), each with `supportsTools`, and a `defaultModel`: the configured default if it is installed, otherwise the first installed chat model. The list is reloaded from Ollama when older than 5 minutes.
 
 ### Real-time Streaming (`/api/chat/stream`)
 

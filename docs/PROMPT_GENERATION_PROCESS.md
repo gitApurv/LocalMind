@@ -24,7 +24,7 @@ Tool selection (`chat.prompt.ToolSelector`) and model budgets (`llm.service.Mode
 2. **Relevance-driven retrieval:** long-term memories and document chunks are found by semantic similarity in Qdrant, always filtered by tenant (`common.ai.VectorFilters`).
 3. **Stable prompt prefix:** system rules, custom instructions and pinned memories come first, followed by the summary and history, so the prefix stays stable across turns (retrieved memories, appended to the system message, can vary).
 4. **Prompt-injection defense:** document excerpts are wrapped in `<reference source="...">` delimiters, and the base rules tell the model to treat them as data, not instructions.
-5. **Fail-open advisors:** an advisor that hits an error returns the request unchanged; a missing memory or excerpt never blocks the chat.
+5. **Fail-open advisors:** every advisor implements `apply()`, and `PromptAdvisor#before` turns any exception into a logged warning and the unchanged request; a missing memory, excerpt or history never blocks the chat. `PromptStructureAdvisor` keeps its base rules and the request system prompt when the user's custom instructions or pinned memories cannot be loaded.
 6. **Observability & auditing:** every prompt's token distribution is logged (`PromptStatsAdvisor`), and every tool call is recorded (`tool`, `input`, `timestamp`, `resultSummary`) with the assistant message.
 
 ---
@@ -93,7 +93,8 @@ sequenceDiagram
 
 Before the reactive stream starts (so failures are ordinary HTTP errors):
 
-- **Ownership check:** `OwnershipGuard.validateConversationOwnership(conversationId, userId)` throws `AccessDeniedException` (`403`) unless the conversation belongs to the caller; a missing conversation is `404`.
+- **Ownership check:** `OwnershipGuard.validateConversationOwnership(conversationId, userId)` throws `AccessDeniedException` (`403`) unless the conversation belongs to the caller. A conversation that does not exist is also `403`, because the check runs before any lookup; the `404` from the following `findById` is only reachable if the conversation is deleted in between.
+- **Model resolution and profile lookup** happen before the user message is saved, in this order: model, profile, message.
 - **Model resolution:** `llmProperties.resolveModel(request.model(), conversation.getModelName())` takes the first non-blank of the request model and the conversation model, falling back to the configured default (`OLLAMA_CHAT_MODEL`, `gemma3:1b`).
 - **User message persistence:** saved before streaming so the prompt is never lost:
 
@@ -109,7 +110,7 @@ Before the reactive stream starts (so failures are ordinary HTTP errors):
   - `outputReserve`: tokens reserved for the answer (`numPredict`, up to `min(2048, ctx / 4)`).
   - `ragBudget`, `historyBudget`: budgets calculated proportionally for excerpts and history.
   - `toolSupported`: tool calling support determined from Ollama capabilities (`"tools" ∈ capabilities`).
-- **ChatClient options and advisors** (inside `ChatTurn.buildPrompt`):
+- **ChatClient options and advisors** (inside `ChatTurn.buildPrompt`). Unlike the steps above, this runs only when the stream is subscribed, so a failure here is an `ERROR` event ("Failed to start the response. Please try again."), not an HTTP error. Tool selection (Step 2) runs at the same point:
 
   ```java
   ChatClient.builder(chatModel).build().prompt()
@@ -135,7 +136,7 @@ Before the reactive stream starts (so failures are ordinary HTTP errors):
 
 Implemented in `com.localmind.chat.prompt.ToolSelector`:
 
-1. **Capability check:** returns no tools when `toolsEnabled` is `false` (it defaults to `true`) or when `ModelCatalogService.supportsTools(model)` is `false`. That check verifies Ollama capabilities dynamically discovered and cached at startup (`"tools" ∈ capabilities`). Without tools, no schema is sent, so models such as `gemma3:1b` do not fail with HTTP 400.
+1. **Capability check:** returns no tools when `toolsEnabled` is `false` (it defaults to `true`) or when `ModelCatalogService.supportsTools(model)` is `false`. That check reads the cached Ollama catalogue (`"tools" ∈ capabilities`), which is loaded at startup and reloaded on demand when it is empty or older than 5 minutes. A name without a tag matches only its `:latest` tag; a model missing from the catalogue falls back to its `ModelProfile` (no tools for unknown models). Without tools, no schema is sent, so models such as `gemma3:1b` do not fail with HTTP 400.
 2. **Tools offered:**
    - `getCurrentDateTime` (`DateTimeTools`): always.
    - `calculateExpression` (`MathTools`): always.
@@ -150,7 +151,7 @@ Implemented in `com.localmind.chat.prompt.ToolSelector`:
      Loop protection triggered: Maximum tool calls (5) reached. Please provide the final response to the user now.
      ```
 
-   - **Audit record:** each call adds `tool` (name), `input` (raw argument JSON), `timestamp` (ISO-8601) and `resultSummary` (the result, cut to 120 characters plus `...` when longer; `empty` for no result). The list is stored as `messages.tool_calls`.
+   - **Audit record:** each call adds `tool` (name), `input` (raw argument JSON), `timestamp` (ISO-8601) and `resultSummary` (the result, cut to 120 characters plus `...` when longer; `empty` for no result; `failed` when the tool threw). Calls refused by the loop guard are neither recorded nor announced with `TOOL_START`/`TOOL_END`. The list is stored as `messages.tool_calls`.
    - **Events:** emits `TOOL_START` before and `TOOL_END` after the call.
    - **Failures:** an exception is logged and the model receives `Error executing tool (<name>). Continue without its result.`
 4. **Tool context:** `userId` and `conversationId` are passed as the Spring AI `ToolContext`, so memory and document tools cannot be pointed at another tenant by the model.
@@ -262,6 +263,7 @@ Implemented in `com.localmind.chat.prompt.HistoryAdvisor`:
    ```
 
 3. **Trim to budget (`HistoryTrimmer.trimToBudget`)** with `ModelProfile.historyBudget()` (default `3400`):
+   - First skips every `USER` message not directly followed by an `ASSISTANT` reply (left by a failed, stopped or interrupted turn), so the model never sees two user turns in a row.
    - Walks from the newest message to the oldest, keeping `(USER, ASSISTANT)` pairs together.
    - The newest turn is always kept, even if it alone exceeds the budget; older turns are added while they fit.
    - Assistant messages with `toolCalls` get a compact note from `ToolNoteRenderer`:
@@ -316,8 +318,8 @@ The advisor never changes the request.
    - Bumps `conversations.updated_at` with `ConversationRepository.touch(...)`, a targeted update that never overwrites a concurrent rename or pin.
    - Emits `DONE` with the saved message ID.
    - Calls `AutoTitleService.generateTitleAsync(...)`. It runs after every completed turn but only acts while the title is still the placeholder `New Chat`: the model proposes a 3–5 word title (think blocks, quotes and `Title:` prefixes stripped, max 50 characters) and `replacePlaceholderTitle` stores it only if the user has not renamed the conversation meanwhile.
-4. **On model error:** the partial answer is saved and an `ERROR` event is sent. If Ollama says the model does not support tools, the message is *"Model '\<model\>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model."*; otherwise a generic message asks the user to check Ollama. Details are only logged.
-5. **On client disconnect:** the upstream Ollama subscription is disposed and the partial answer is saved.
+4. **On model error:** the partial answer is saved, but only if some content or reasoning was generated (a turn that only ran tools is not saved), and an `ERROR` event is sent. `updated_at` is not touched and no title is generated. If Ollama's error contains "does not support tools", the message is *"Model '\<model\>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model."*; otherwise a generic message asks the user to check Ollama. Details are only logged.
+5. **On client disconnect:** the upstream Ollama subscription is disposed and the partial answer is saved, with the same rule: nothing is saved when no content or reasoning was generated.
 
 ---
 
