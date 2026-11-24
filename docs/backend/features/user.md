@@ -58,13 +58,13 @@ None.
 
 ## Errors
 
-None thrown by this feature. `User not found` errors come from callers (see [auth](auth.md#errors)).
+None thrown by this feature. `User not found` errors (401 `UnauthorizedException`, an invalid session) come from callers (see [auth](auth.md#errors)).
 
 ## Interactions with other features
 
 - `auth.service.AuthService`: creates users, looks them up by email/id, updates `fullName`/`customInstructions`.
 - `auth.service.JwtService` and `auth.dto.UserSummary`: read `User` fields for token claims and responses.
-- `chat.prompt.PromptStructureAdvisor`: `findById` to append the user's `customInstructions` to the system prompt.
+- `chat.prompt.advisor.PromptStructureAdvisor`: `findById` to append the user's `customInstructions` to the system prompt.
 - This feature depends on nothing else.
 
 ## Tests

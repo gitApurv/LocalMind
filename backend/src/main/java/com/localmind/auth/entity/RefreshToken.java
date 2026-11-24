@@ -15,11 +15,14 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/**
+ * JPA entity for table {@code refresh_tokens}: one refresh token issued to a user, stored only as its SHA-256 hash.
+ * Rotated tokens are kept as revoked rows until they expire, so replaying one is detected as token reuse by {@code
+ * AuthService#refresh}.
+ */
 @Entity
 @Table(name = "refresh_tokens", indexes = {
-        // Reuse detection deletes every token of the user.
         @Index(name = "idx_refresh_tokens_user", columnList = "user_id"),
-        // The hourly cleanup deletes expired tokens.
         @Index(name = "idx_refresh_tokens_expires", columnList = "expires_at")})
 @Getter
 @Setter
@@ -44,7 +47,6 @@ public class RefreshToken {
     @Column(name = "revoked", nullable = false)
     private boolean revoked;
 
-    /** Set when the token was revoked because it was exchanged for a new one (not on logout). */
     @Column(name = "rotated_at")
     private Instant rotatedAt;
 
@@ -70,7 +72,6 @@ public class RefreshToken {
         rotatedAt = now;
     }
 
-    /** True when the token was rotated less than {@code grace} ago, e.g. by a parallel request from another tab. */
     public boolean isRecentlyRotated(Instant now, Duration grace) {
         return rotatedAt != null && rotatedAt.plus(grace).isAfter(now);
     }

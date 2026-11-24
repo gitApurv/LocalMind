@@ -1,6 +1,5 @@
 package com.localmind.auth.service;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -15,6 +14,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+/**
+ * Unit tests for {@link RefreshTokenCleanupService}: deleting tokens expired before now and returning the count.
+ */
 class RefreshTokenCleanupServiceTest {
 
     private final RefreshTokenRepository repository = mock(RefreshTokenRepository.class);
@@ -32,13 +34,5 @@ class RefreshTokenCleanupServiceTest {
         verify(repository).deleteExpiredBefore(cutoff.capture());
         assertTrue(
                 !cutoff.getValue().isBefore(before) && cutoff.getValue().isBefore(before.plus(Duration.ofMinutes(1))));
-    }
-
-    @Test
-    @DisplayName("scheduledCleanup() logs a failure instead of throwing, so the next run still happens")
-    void scheduledCleanupSwallowsFailures() {
-        when(repository.deleteExpiredBefore(any())).thenThrow(new IllegalStateException("database unavailable"));
-
-        assertDoesNotThrow(service::scheduledCleanup);
     }
 }

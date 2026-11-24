@@ -9,19 +9,18 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Spring Data repository for {@link RefreshToken} (table {@code refresh_tokens}).
+ */
 public interface RefreshTokenRepository extends JpaRepository<RefreshToken, String> {
 
     Optional<RefreshToken> findByTokenHash(String tokenHash);
 
-    /** Locks the row so concurrent refreshes with the same token are serialized. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT r FROM RefreshToken r WHERE r.tokenHash = :tokenHash")
     Optional<RefreshToken> findByTokenHashForUpdate(@Param("tokenHash") String tokenHash);
 
-    /** Deletes tokens that expired before {@code cutoff}; returns how many were removed. */
-    @Transactional
     @Modifying
     @Query("DELETE FROM RefreshToken r WHERE r.expiresAt < :cutoff")
     int deleteExpiredBefore(@Param("cutoff") Instant cutoff);

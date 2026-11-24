@@ -10,8 +10,8 @@ rationale is in [DESIGN.md section 4.1](../../DESIGN.md); this page documents th
 
 - Register users: normalise email, enforce password limits, BCrypt-hash the password, reject duplicate emails.
 - Authenticate email + password and issue an access token (JSON body) plus a refresh token (HttpOnly cookie).
-- Rotate refresh tokens on every refresh, detect replay of revoked tokens and revoke all of the user's sessions.
-- Revoke the presented refresh token on logout and expire the cookie.
+- Rotate refresh tokens on every refresh, detect replay of rotated tokens and delete all of the user's refresh tokens (ending every session).
+- Delete the presented refresh token on logout and expire the cookie.
 - Read and update the caller's profile (`fullName`, `customInstructions`).
 - Build the signed JWT (claims, lifetime). Signature validation, the signing key and the security filter chain live in
   `common.security` (`SecurityConfig`, `JwtSigningKeyStore`, `JwtProperties`), not in this feature.
@@ -22,10 +22,11 @@ rationale is in [DESIGN.md section 4.1](../../DESIGN.md); this page documents th
 | --- | --- | --- |
 | [`AuthController`](../../../backend/src/main/java/com/localmind/auth/controller/AuthController.java) | controller | `/api/auth` endpoints; sets/clears the refresh cookie via `Set-Cookie` |
 | [`AuthService`](../../../backend/src/main/java/com/localmind/auth/service/AuthService.java) | service | Register, login, refresh rotation + reuse detection, logout, profile read/update |
-| [`RefreshTokenCleanupService`](../../../backend/src/main/java/com/localmind/auth/service/RefreshTokenCleanupService.java) | service | Hourly `@Scheduled` delete of expired refresh tokens |
+| [`RefreshTokenCleanupService`](../../../backend/src/main/java/com/localmind/auth/service/RefreshTokenCleanupService.java) | service | `@Transactional` delete of expired refresh tokens |
+| [`RefreshTokenCleanupScheduler`](../../../backend/src/main/java/com/localmind/auth/service/RefreshTokenCleanupScheduler.java) | service | Hourly `@Scheduled` call of `RefreshTokenCleanupService`; logs failures |
 | [`JwtService`](../../../backend/src/main/java/com/localmind/auth/service/JwtService.java) | service | Builds and signs the access token through the `JwtEncoder` bean; issuer `SecurityConfig.TOKEN_ISSUER` |
 | [`RefreshTokenCookieFactory`](../../../backend/src/main/java/com/localmind/auth/service/RefreshTokenCookieFactory.java) | service | Builds the `refreshToken` cookie (create / expire) from `JwtProperties` |
-| [`RefreshTokenRepository`](../../../backend/src/main/java/com/localmind/auth/repository/RefreshTokenRepository.java) | repository | Lookup by hash (plain and `PESSIMISTIC_WRITE`), bulk delete by user |
+| [`RefreshTokenRepository`](../../../backend/src/main/java/com/localmind/auth/repository/RefreshTokenRepository.java) | repository | Lookup by hash (plain and `PESSIMISTIC_WRITE`), bulk delete by user (`deleteByUserId`), bulk delete of expired tokens (`deleteExpiredBefore`) |
 | [`RefreshToken`](../../../backend/src/main/java/com/localmind/auth/entity/RefreshToken.java) | entity | `refresh_tokens` row; `rotate()`, `isExpired()`, `isRecentlyRotated()` |
 | [`RegisterRequest`](../../../backend/src/main/java/com/localmind/auth/dto/RegisterRequest.java) | dto | Registration body |
 | [`LoginRequest`](../../../backend/src/main/java/com/localmind/auth/dto/LoginRequest.java) | dto | Login body |
@@ -222,6 +223,7 @@ Validation errors are rendered by `GlobalExceptionHandler` as one 400 whose `mes
     row whose `expires_at` has passed. Rotated rows that have not expired are kept on purpose: replaying one is how
     reuse detection spots a stolen token. Once expired, a token is rejected anyway, so deleting it loses nothing.
 11. `GET /me` and `PATCH /me` operate only on the user id from the token; there is no way to address another user.
+    A token whose user no longer exists is an invalid session: 401 `User not found`, as on refresh.
 12. Profile update trims values; blank `fullName` is ignored, empty `customInstructions` clears the field.
 
 ```mermaid
@@ -237,10 +239,11 @@ stateDiagram-v2
 ## Side effects & async work
 
 - No `TransactionHooks`, no `@Async`, no Qdrant access, no outbound HTTP.
-- `RefreshTokenCleanupService#scheduledCleanup` runs every hour (`@Scheduled`, first run 1 minute after startup;
-  `@EnableScheduling` is on `LocalMindApplication`). It calls `RefreshTokenRepository#deleteExpiredBefore(now)`, a
-  `@Modifying` bulk delete in its own transaction backed by index `idx_refresh_tokens_expires`, and logs the number of
-  deleted rows. A failed run is logged and retried an hour later.
+- `RefreshTokenCleanupScheduler#scheduledCleanup` runs every hour (`@Scheduled`, first run 1 minute after startup;
+  `@EnableScheduling` is on `LocalMindApplication`) and calls `RefreshTokenCleanupService#deleteExpiredTokens`. That
+  `@Transactional` method calls `RefreshTokenRepository#deleteExpiredBefore(now)`, a `@Modifying` bulk delete backed
+  by index `idx_refresh_tokens_expires`, and logs the number of deleted rows. The scheduler is a separate bean so the
+  call goes through the service's transactional proxy. A failed run is logged and retried an hour later.
 - `RefreshTokenRepository#deleteByUserId` is a `@Modifying` JPQL bulk delete used by reuse detection; it commits even
   though the method then throws `UnauthorizedException` (`noRollbackFor`).
 - The signing key file is created on first start by `common.security.JwtSigningKeyStore` (not this feature).
@@ -255,8 +258,8 @@ Bound to `common.security.JwtProperties` (`localmind.jwt`), read by `JwtService`
 | `localmind.jwt.access-token-expiration` | `JWT_ACCESS_TOKEN_EXPIRATION` | `15m` | Access token `exp` and `expiresIn` |
 | `localmind.jwt.refresh-token-expiration` | `JWT_REFRESH_TOKEN_EXPIRATION` | `7d` | Refresh row `expires_at` and cookie `Max-Age` |
 | `localmind.jwt.cookie-secure` | `JWT_COOKIE_SECURE` | `false` | `Secure` cookie flag |
-| `localmind.jwt.cookie-same-site` | `JWT_COOKIE_SAME_SITE` | `Strict` | `SameSite` cookie attribute |
-| `localmind.jwt.key-file` | `JWT_KEY_FILE` | `./data/jwt-signing-key.pem` | RSA key (PKCS#8 PEM, mode `rw-------`) used by `SecurityConfig` to sign/verify |
+| `localmind.jwt.cookie-same-site` | `JWT_COOKIE_SAME_SITE` | `Strict` | `SameSite` cookie attribute; blank falls back to `Strict` |
+| `localmind.jwt.key-file` | `JWT_KEY_FILE` | `./data/jwt-signing-key.pem` | RSA key (PKCS#8 PEM, created with mode `rw-------`) used by `SecurityConfig` to sign/verify; blank falls back to the default |
 
 Hard-coded: issuer `localmind` (`SecurityConfig.TOKEN_ISSUER`), refresh token 32 bytes, rotation grace 10 s, BCrypt limit 72 bytes, cookie name
 `refreshToken`, cookie path `/api/auth`.
@@ -276,7 +279,7 @@ Hard-coded: issuer `localmind` (`SecurityConfig.TOKEN_ISSUER`), refresh token 32
 | Refresh: token expired | `UnauthorizedException` | 401 | `Refresh token expired` |
 | Refresh: user row missing | `UnauthorizedException` | 401 | `User not found` |
 | `/me`: no bearer token | `ProblemDetailSecurityHandler` | 401 | `Authentication is required to access this resource` |
-| `/me`: user id from token not in `users` | `ResourceNotFoundException` | 404 | `User not found` |
+| `/me` (`GET`/`PATCH`): user id from token not in `users` | `UnauthorizedException` | 401 | `User not found` |
 | `/me`: no authentication object at all | `UnauthorizedException` (`CurrentUserIdArgumentResolver`) | 401 | `No authenticated user in security context` |
 | Invalid/expired bearer token, or `iss` other than `localmind`, on any path | security filter chain (`ProblemDetailSecurityHandler`) | 401 | `Authentication is required to access this resource` |
 
@@ -287,16 +290,17 @@ Hard-coded: issuer `localmind` (`SecurityConfig.TOKEN_ISSUER`), refresh token 32
 - Uses `common.security`: `JwtProperties`, the `JwtEncoder` bean, `PasswordEncoder` (BCrypt) bean,
   `CurrentUserId` / `CurrentUserIdArgumentResolver.USER_ID_CLAIM`; `common.exception` for errors.
 - Every other feature consumes the access token indirectly through the resource server and `@CurrentUserId`.
-- `chat.prompt.PromptStructureAdvisor` reads `User.customInstructions` (set via `PATCH /me`) directly from
+- `chat.prompt.advisor.PromptStructureAdvisor` reads `User.customInstructions` (set via `PATCH /me`) directly from
   `UserRepository`; no other feature calls `AuthService`.
 
 ## Tests
 
 | Test class | What it covers |
 | --- | --- |
-| [`AuthControllerTest`](../../../backend/src/test/java/com/localmind/auth/controller/AuthControllerTest.java) | `@SpringBootTest` + MockMvc on H2: register (201, 409, 400 incl. 7/8-char password and 101-char name), login (200 + HttpOnly cookie, 401), refresh rotation, reuse detection revoking the family, grace window for parallel tabs, refresh after logout rejected while another session survives, `/me` without token 401, logout clears cookie, `GET`/`PATCH /me`, 401 ProblemDetail with `WWW-Authenticate`, malformed JSON 400, expired-token cleanup keeping reuse detection, token with a foreign issuer 401, refresh cookie `Path=/api/auth` + `HttpOnly` + `SameSite=Strict`, password over 72 UTF-8 bytes (but under 72 characters) 400 `Password must not exceed 72 bytes` |
-| [`AuthServiceTest`](../../../backend/src/test/java/com/localmind/auth/service/AuthServiceTest.java) | Login with an unknown email still runs one `PasswordEncoder.matches` against the dummy hash and throws `UnauthorizedException` |
+| [`AuthControllerTest`](../../../backend/src/test/java/com/localmind/auth/controller/AuthControllerTest.java) | `@SpringBootTest` + MockMvc on H2: register (201, 409, 400 incl. 7/8-char password and 101-char name), login (200 + HttpOnly cookie, 401), refresh rotation, reuse detection deleting the family, grace window for parallel tabs, refresh after logout rejected while another session survives, `/me` without token 401, logout clears cookie, `GET`/`PATCH /me` with a MockMvc `jwt()` token, `/me` of a deleted user 401 `User not found`, a real login access token accepted by `/me`, 401 ProblemDetail with `WWW-Authenticate`, malformed JSON 400, expired-token cleanup keeping reuse detection, token with a foreign issuer 401, refresh cookie `Path=/api/auth` + `HttpOnly` + `SameSite=Strict`, password over 72 UTF-8 bytes (but under 72 characters) 400 `Password must not exceed 72 bytes` |
+| [`AuthServiceTest`](../../../backend/src/test/java/com/localmind/auth/service/AuthServiceTest.java) | Login with an unknown email still runs one `PasswordEncoder.matches` against the dummy hash and throws `UnauthorizedException`; `getCurrentUser`/`updateProfile` of a deleted user throw `UnauthorizedException` `User not found` |
 | [`JwtServiceTest`](../../../backend/src/test/java/com/localmind/auth/service/JwtServiceTest.java) | Access token claims: `iss=localmind`, `sub`/`userId`, `email`, `fullName` `""` when null, `exp - iat` = configured lifetime |
-| [`RefreshTokenCleanupServiceTest`](../../../backend/src/test/java/com/localmind/auth/service/RefreshTokenCleanupServiceTest.java) | Cleanup deletes tokens expired before now and returns the count; a failing scheduled run is logged, not thrown |
+| [`RefreshTokenCleanupServiceTest`](../../../backend/src/test/java/com/localmind/auth/service/RefreshTokenCleanupServiceTest.java) | Cleanup deletes tokens expired before now and returns the count |
+| [`RefreshTokenCleanupSchedulerTest`](../../../backend/src/test/java/com/localmind/auth/service/RefreshTokenCleanupSchedulerTest.java) | The scheduled run delegates to the cleanup service; a failing run is logged, not thrown |
 | [`RepositoryPersistenceTests`](../../../backend/src/test/java/com/localmind/integration/RepositoryPersistenceTests.java) | `RefreshToken` persist, `findByTokenHash`, `deleteByUserId`, `deleteExpiredBefore` (only expired rows, rotated or not) (among other features' repositories) |
-| [`JwtSigningKeyStoreTest`](../../../backend/src/test/java/com/localmind/common/security/JwtSigningKeyStoreTest.java) | Signing key persisted and reloaded identically (common.security, supports this feature) |
+| [`JwtSigningKeyStoreTest`](../../../backend/src/test/java/com/localmind/common/security/JwtSigningKeyStoreTest.java) | Signing key persisted and reloaded identically, file `rw-------` on POSIX (common.security, supports this feature) |

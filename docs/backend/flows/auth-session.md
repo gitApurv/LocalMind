@@ -68,5 +68,6 @@ than revoked on purpose: a revoked token would trigger reuse detection and end e
 ## Signing key
 
 The RSA key pair is loaded from `localmind.jwt.key-file` and generated on first start, so access tokens survive a
-restart. Deleting the file invalidates every outstanding access token; refresh tokens keep working because they are
+restart. On POSIX file systems the file is created with owner-only `rw-------` permissions in the same call, so the
+private key is never readable by other users. Deleting the file invalidates every outstanding access token; refresh tokens keep working because they are
 opaque values checked against the database.
