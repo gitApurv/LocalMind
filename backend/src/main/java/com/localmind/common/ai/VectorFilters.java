@@ -19,6 +19,15 @@ public final class VectorFilters {
         return b.and(ownedByConversation, type).build();
     }
 
+    public static Filter.Expression attachmentChunks(String userId, String attachmentId) {
+        FilterExpressionBuilder b = new FilterExpressionBuilder();
+        Op user = b.eq(VectorMetadata.USER_ID, userId);
+        Op attachment = b.eq(VectorMetadata.ATTACHMENT_ID, attachmentId);
+        Op type = b.eq(VectorMetadata.TYPE, VectorMetadata.TYPE_DOC_CHUNK);
+        Op ownedByUser = b.and(user, attachment);
+        return b.and(ownedByUser, type).build();
+    }
+
     public static Filter.Expression userMemories(String userId) {
         FilterExpressionBuilder b = new FilterExpressionBuilder();
         Op user = b.eq(VectorMetadata.USER_ID, userId);

@@ -41,18 +41,23 @@ See [security.md](../security.md) for the full model. In short:
   `/actuator/health`. `ASYNC` and `ERROR` dispatches are permitted so SSE
   streams and error rendering are not re-authenticated mid-response. Everything else requires a valid token.
 - **Signing key:** `SecurityConfig#rsaKeyPair` loads `localmind.jwt.key-file`, or generates a 2048-bit RSA key and
-  writes it as PKCS#8 PEM with POSIX permissions `rw-------` (ignored on Windows). The JWK key id is the key's
+  writes it as PKCS#8 PEM. On POSIX file systems the file is created with `rw-------` in the same call
+  (`Files.newByteChannel` with a permission attribute), so it is never briefly readable by others; on Windows the
+  directory's ACLs apply. The JWK key id is the key's
   thumbprint, so it is stable across restarts.
 - **`@CurrentUserId`:** resolves the `userId` claim, falling back to the token subject, then to
-  `Authentication#getName()`. With no authentication it throws `UnauthorizedException`.
+  `Authentication#getName()`. With no authentication (or no name) it throws `UnauthorizedException`
+  `No authenticated user in security context`.
 - **CORS:** origins from `localmind.cors.allowed-origins`; methods `GET POST PATCH DELETE PUT OPTIONS`; headers
-  `Authorization Content-Type Accept X-Requested-With`; exposes `Set-Cookie`, `Authorization`; credentials allowed;
-  preflight cached for 3600 s.
+  `Authorization Content-Type Accept X-Requested-With`; no exposed response headers; credentials allowed; preflight
+  cached for 3600 s.
 - **Passwords:** `BCryptPasswordEncoder` with default strength.
 
 ## Errors
 
-See [errors.md](../errors.md).
+See [errors.md](../errors.md). Every 403, whether from an ownership check (`GlobalExceptionHandler`) or from the
+filter chain (`ProblemDetailSecurityHandler`), uses `ProblemDetails.ACCESS_DENIED_MESSAGE`
+(`You do not have access to this resource`).
 
 ## Transaction hooks
 
@@ -61,7 +66,10 @@ See [errors.md](../errors.md).
 - `afterCommit` runs once the transaction commits; `afterRollback` runs if it rolls back.
 - With no active transaction synchronization, `afterCommit` runs immediately and `afterRollback` never runs.
 - Callback exceptions are logged at `WARN` and swallowed, because the transaction outcome is already final.
-- `TransactionHooks.afterCommit(action)` is shorthand with a no-op rollback action.
+- `TransactionHooks.afterCommit(action)` registers a synchronization that only runs `action` after commit (or
+  immediately without an active transaction); nothing runs on rollback.
+- `TransactionHooks.onRollback(action)` runs `action` only if the transaction rolls back, to undo an external write
+  made inside it (`UserMemoryWriteService` deletes the embedding it added); without an active transaction it never runs.
 
 Features use it to start `@Async` jobs only once their rows are visible, to delete files and vectors only once a delete
 has committed, and to remove an already-stored upload if the transaction fails.
@@ -88,8 +96,9 @@ All vectors live in one Qdrant collection (`localmind.qdrant.collection-name`). 
 | `userMemories(userId)` | `userId == ? AND type == USER_MEMORY` |
 | `userMemory(userId, memoryId)` | `userId == ? AND memoryId == ? AND type == USER_MEMORY` |
 
-At startup `QdrantConfig` creates keyword payload indexes on `userId`, `conversationId`, `type` and `memoryId`. Failures
-(index already exists, Qdrant down) are logged at `DEBUG` and ignored. The collection itself is created by Spring AI
+At startup `QdrantConfig` creates keyword payload indexes on `userId`, `conversationId`, `type`, `memoryId` and `attachmentId`. Failures
+(index already exists, Qdrant down) are logged at `DEBUG` and ignored; an interrupt while waiting restores the
+thread's interrupt flag. The collection itself is created by Spring AI
 (`spring.ai.vectorstore.qdrant.initialize-schema: true`) with the embedding model's dimension.
 
 ## Context keys
@@ -113,8 +122,19 @@ only if it is a non-blank `String`, else `null`.
 | `localmind.cors.allowed-origins` | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Allowed browser origins |
 | `localmind.qdrant.collection-name` | `QDRANT_COLLECTION` | `localmind_vectors` | Collection that receives payload indexes |
 
+Blank values (an environment variable set to an empty string) are treated like missing ones: `JwtProperties`
+(`cookie-same-site`, `key-file`) and `QdrantProperties` fall back to their defaults and trim configured values;
+`CorsProperties` drops blank origins, trims the rest and falls back to the default origins when none remain.
+
 ## Tests
 
 | Test class | What it covers |
 | --- | --- |
-| [`JwtSigningKeyStoreTest`](../../../backend/src/test/java/com/localmind/common/security/JwtSigningKeyStoreTest.java) | The key generated on first start is persisted and reloaded unchanged on the next start |
+| [`JwtSigningKeyStoreTest`](../../../backend/src/test/java/com/localmind/common/security/JwtSigningKeyStoreTest.java) | The key generated on first start is persisted and reloaded unchanged on the next start; on POSIX the file is `rw-------` |
+| [`JwtPropertiesTest`](../../../backend/src/test/java/com/localmind/common/security/JwtPropertiesTest.java) | Defaults for missing and blank values; configured values trimmed |
+| [`CorsPropertiesTest`](../../../backend/src/test/java/com/localmind/common/security/CorsPropertiesTest.java) | Default origins for missing, empty or all-blank lists; blank entries dropped |
+| [`QdrantPropertiesTest`](../../../backend/src/test/java/com/localmind/common/config/QdrantPropertiesTest.java) | Default collection for missing or blank names |
+| [`CurrentUserIdArgumentResolverTest`](../../../backend/src/test/java/com/localmind/common/security/CurrentUserIdArgumentResolverTest.java) | `userId` claim, then subject, then authentication name; 401 without authentication or name |
+| [`ProblemDetailSecurityHandlerTest`](../../../backend/src/test/java/com/localmind/common/security/ProblemDetailSecurityHandlerTest.java) | Filter-chain 403 and 401 written as ProblemDetail with `message` and `WWW-Authenticate` |
+| [`GlobalExceptionHandlerTest`](../../../backend/src/test/java/com/localmind/common/exception/GlobalExceptionHandlerTest.java) | Validation messages joined with `"; "` (fallback `Validation failed`), `ApiException` status, 403, `DataIntegrityViolationException` to 409, unexpected exception to 500 with a generic message |
+| [`TransactionHooksTest`](../../../backend/src/test/java/com/localmind/common/transaction/TransactionHooksTest.java) | After-commit only on commit, rollback action only on rollback, immediate run without a transaction, callback failures swallowed |

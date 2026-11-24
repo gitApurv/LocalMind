@@ -35,10 +35,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ProblemDetails.of(ex.getStatus(), ex.getMessage());
     }
 
-    /** Ownership violations thrown inside controllers and services. */
     @ExceptionHandler(AccessDeniedException.class)
     public ProblemDetail handleAccessDenied(AccessDeniedException ex) {
-        return ProblemDetails.of(HttpStatus.FORBIDDEN, "You do not have access to this resource");
+        return ProblemDetails.of(HttpStatus.FORBIDDEN, ProblemDetails.ACCESS_DENIED_MESSAGE);
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)
@@ -63,7 +62,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(status).headers(headers).body(problem);
     }
 
-    /** Adds the {@code message} property to every ProblemDetail produced by the base class. */
     @Override
     protected ResponseEntity<Object> handleExceptionInternal(Exception ex, Object body, HttpHeaders headers,
             HttpStatusCode statusCode, WebRequest request) {

@@ -2,9 +2,15 @@ package com.localmind.common.security;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
@@ -15,6 +21,7 @@ import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 import java.util.Base64;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -27,6 +34,7 @@ final class JwtSigningKeyStore {
     private static final String PEM_HEADER = "-----BEGIN PRIVATE KEY-----";
     private static final String PEM_FOOTER = "-----END PRIVATE KEY-----";
     private static final int KEY_SIZE = 2048;
+    private static final Set<PosixFilePermission> OWNER_ONLY = PosixFilePermissions.fromString("rw-------");
 
     private JwtSigningKeyStore() {
     }
@@ -74,11 +82,20 @@ final class JwtSigningKeyStore {
         byte[] privateKeyBytes = keyPair.getPrivate().getEncoded();
         String body = Base64.getMimeEncoder(64, lineSeparator).encodeToString(privateKeyBytes);
         String pem = PEM_HEADER + "\n" + body + "\n" + PEM_FOOTER + "\n";
-        Files.writeString(keyFile, pem, StandardCharsets.US_ASCII);
-        try {
-            Files.setPosixFilePermissions(keyFile, PosixFilePermissions.fromString("rw-------"));
-        } catch (UnsupportedOperationException e) {
-            // Not a POSIX file system (Windows): rely on the directory's ACLs.
+        writeOwnerOnly(keyFile, pem.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private static void writeOwnerOnly(Path keyFile, byte[] content) throws IOException {
+        Set<OpenOption> options = Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        boolean posix = keyFile.getFileSystem().supportedFileAttributeViews().contains("posix");
+        FileAttribute<?>[] attributes = posix
+                ? new FileAttribute<?>[]{PosixFilePermissions.asFileAttribute(OWNER_ONLY)}
+                : new FileAttribute<?>[0];
+        try (SeekableByteChannel channel = Files.newByteChannel(keyFile, options, attributes)) {
+            ByteBuffer buffer = ByteBuffer.wrap(content);
+            while (buffer.hasRemaining()) {
+                channel.write(buffer);
+            }
         }
     }
 }

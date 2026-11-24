@@ -14,6 +14,7 @@ import java.security.interfaces.RSAPublicKey;
 import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -31,17 +32,18 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Spring configuration for authentication: a stateless JWT resource server with CORS, BCrypt password hashing and the
+ * RSA key that signs and verifies access tokens. Only registration, login, refresh, logout, {@code /error} and {@code
+ * /actuator/health} are reachable without a token; 401 and 403 responses are written by
+ * {@link ProblemDetailSecurityHandler}.
+ */
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
-    /** {@code iss} claim of every access token; tokens from any other issuer are rejected. */
     public static final String TOKEN_ISSUER = "localmind";
 
-    /**
-     * Endpoints reachable without a token. Listed one by one so {@code /api/auth/me} stays protected. Only the health
-     * probe of Actuator is public.
-     */
     private static final String[] PUBLIC_PATHS = {"/api/auth/register", "/api/auth/login", "/api/auth/refresh",
             "/api/auth/logout", "/error", "/actuator/health"};
 
@@ -57,8 +59,8 @@ public class SecurityConfig {
                 .exceptionHandling(
                         handling -> handling.authenticationEntryPoint(problemHandler)
                                 .accessDeniedHandler(problemHandler))
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {
-                }).authenticationEntryPoint(problemHandler).accessDeniedHandler(problemHandler));
+                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults())
+                        .authenticationEntryPoint(problemHandler).accessDeniedHandler(problemHandler));
 
         return http.build();
     }
@@ -69,7 +71,6 @@ public class SecurityConfig {
         configuration.setAllowedOrigins(corsProperties.allowedOrigins());
         configuration.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "PUT", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "X-Requested-With"));
-        configuration.setExposedHeaders(List.of("Set-Cookie", "Authorization"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 
@@ -91,7 +92,6 @@ public class SecurityConfig {
 
     @Bean
     public RSAKey rsaKey(KeyPair rsaKeyPair) {
-        // A stable key id derived from the key itself, so it survives restarts like the key does.
         RSAPublicKey publicKey = (RSAPublicKey) rsaKeyPair.getPublic();
         RSAPrivateKey privateKey = (RSAPrivateKey) rsaKeyPair.getPrivate();
         try {

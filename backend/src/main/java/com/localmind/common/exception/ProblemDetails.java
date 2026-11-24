@@ -9,6 +9,8 @@ import org.springframework.http.ProblemDetail;
  */
 public final class ProblemDetails {
 
+    public static final String ACCESS_DENIED_MESSAGE = "You do not have access to this resource";
+
     private static final String MESSAGE_PROPERTY = "message";
 
     private ProblemDetails() {
@@ -20,7 +22,6 @@ public final class ProblemDetails {
         return problem;
     }
 
-    /** Adds the {@code message} property to a ProblemDetail created by Spring. */
     public static ProblemDetail withMessage(ProblemDetail problem) {
         String message = problem.getDetail() != null ? problem.getDetail() : problem.getTitle();
         problem.setProperty(MESSAGE_PROPERTY, message);

@@ -17,6 +17,8 @@ public class CurrentUserIdArgumentResolver implements HandlerMethodArgumentResol
 
     public static final String USER_ID_CLAIM = "userId";
 
+    private static final String NO_AUTHENTICATED_USER = "No authenticated user in security context";
+
     @Override
     public boolean supportsParameter(MethodParameter parameter) {
         return parameter.hasParameterAnnotation(CurrentUserId.class)
@@ -32,7 +34,7 @@ public class CurrentUserIdArgumentResolver implements HandlerMethodArgumentResol
 
     private static String resolveUserId(Authentication authentication) {
         if (authentication == null) {
-            throw new UnauthorizedException("No authenticated user in security context");
+            throw new UnauthorizedException(NO_AUTHENTICATED_USER);
         }
         if (authentication.getPrincipal() instanceof Jwt jwt) {
             String userId = jwt.getClaimAsString(USER_ID_CLAIM);
@@ -41,6 +43,6 @@ public class CurrentUserIdArgumentResolver implements HandlerMethodArgumentResol
         if (authentication.getName() != null) {
             return authentication.getName();
         }
-        throw new UnauthorizedException("No authenticated user in security context");
+        throw new UnauthorizedException(NO_AUTHENTICATED_USER);
     }
 }

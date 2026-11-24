@@ -4,6 +4,7 @@ import com.localmind.common.exception.ProblemDetails;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -19,15 +20,12 @@ import tools.jackson.databind.ObjectMapper;
  * Writes 401 and 403 responses produced by the security filter chain as the same ProblemDetail JSON that
  * {@code GlobalExceptionHandler} returns, while keeping the RFC 6750 {@code WWW-Authenticate} header.
  */
+@RequiredArgsConstructor
 class ProblemDetailSecurityHandler implements AuthenticationEntryPoint, AccessDeniedHandler {
 
     private final ObjectMapper objectMapper;
     private final BearerTokenAuthenticationEntryPoint bearerEntryPoint = new BearerTokenAuthenticationEntryPoint();
     private final BearerTokenAccessDeniedHandler bearerAccessDeniedHandler = new BearerTokenAccessDeniedHandler();
-
-    ProblemDetailSecurityHandler(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
-    }
 
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response,
@@ -40,7 +38,7 @@ class ProblemDetailSecurityHandler implements AuthenticationEntryPoint, AccessDe
     public void handle(HttpServletRequest request, HttpServletResponse response,
             AccessDeniedException accessDeniedException) throws IOException {
         bearerAccessDeniedHandler.handle(request, response, accessDeniedException);
-        writeProblem(response, HttpStatus.FORBIDDEN, "You do not have access to this resource");
+        writeProblem(response, HttpStatus.FORBIDDEN, ProblemDetails.ACCESS_DENIED_MESSAGE);
     }
 
     private void writeProblem(HttpServletResponse response, HttpStatus status, String message) throws IOException {
