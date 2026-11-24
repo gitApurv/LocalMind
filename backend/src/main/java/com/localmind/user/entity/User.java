@@ -13,6 +13,10 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/**
+ * JPA entity for table {@code users}: one registered account with its BCrypt password hash, full name and custom
+ * instructions. The email is stored trimmed and lowercased and is unique.
+ */
 @Entity
 @Table(name = "users")
 @Getter

@@ -26,6 +26,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * REST endpoints for registration, login, token refresh, logout and the caller's profile under {@code /api/auth}. Login
+ * and refresh set the new refresh token as an HTTP-only cookie built by {@link RefreshTokenCookieFactory}; logout
+ * expires that cookie.
+ */
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor

@@ -15,6 +15,10 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 
+/**
+ * Unit tests for {@link ConversationSummaryService}: storing a generated summary with its watermark, skipping turns
+ * already summarised and never storing a summary without a watermark.
+ */
 class ConversationSummaryServiceTest {
     private final ChatModel chatModel = mock(ChatModel.class);
     private final ConversationRepository conversationRepository = mock(ConversationRepository.class);

@@ -11,10 +11,14 @@ import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+/**
+ * Spring configuration for Spring MVC: the async request timeout for streamed responses, the
+ * {@link CurrentUserIdArgumentResolver} and the {@code shortTimeoutRestClient} bean for LocalMind's own short HTTP
+ * calls.
+ */
 @Configuration
 public class WebMvcConfig implements WebMvcConfigurer {
 
-    /** Long enough for slow local models to finish streaming a response. */
     private static final Duration ASYNC_REQUEST_TIMEOUT = Duration.ofMinutes(3);
     private static final Duration HTTP_CLIENT_TIMEOUT = Duration.ofSeconds(5);
 
@@ -28,12 +32,6 @@ public class WebMvcConfig implements WebMvcConfigurer {
         resolvers.add(new CurrentUserIdArgumentResolver());
     }
 
-    /**
-     * Client for LocalMind's own short HTTP calls (Ollama model list, SearXNG) with tight timeouts. The shared
-     * {@code RestClient.Builder} is cloned, never customized: Spring AI builds its Ollama client from that builder, and
-     * embedding or completion calls on slow hardware need far longer than these timeouts. Declaring a
-     * {@code RestClient.Builder} bean here would replace Spring Boot's and break that separation.
-     */
     @Bean
     public RestClient shortTimeoutRestClient(RestClient.Builder restClientBuilder) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();

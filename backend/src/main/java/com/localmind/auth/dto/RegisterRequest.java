@@ -5,7 +5,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 /**
- * Limits match the {@code users} columns; BCrypt ignores password bytes beyond 72, so longer passwords are rejected.
+ * Request body of {@code POST /api/auth/register}: email, password and full name of the new account. Limits match the
+ * {@code users} columns; BCrypt ignores password bytes beyond 72, so longer passwords are rejected.
  */
 public record RegisterRequest(
         @NotBlank(message = "Email is required") @Email(message = "Invalid email format") @Size(max = 255, message = "Email cannot exceed 255 characters") String email,

@@ -2,6 +2,10 @@ package com.localmind.common.exception;
 
 import org.springframework.http.HttpStatus;
 
+/**
+ * Thrown when a request conflicts with existing data, such as an already registered email; rendered as {@code 409} by
+ * {@link GlobalExceptionHandler}.
+ */
 public class ConflictException extends ApiException {
 
     public ConflictException(String message) {

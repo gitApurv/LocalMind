@@ -30,7 +30,6 @@ public record ModelProfile(String modelName, int numCtx, int outputReserve, int 
         return Math.min(Math.max(contextLength, 4096), 32768);
     }
 
-    /** Budget used for models without dedicated Ollama context metrics. */
     public static ModelProfile generic(String modelName, boolean toolSupported) {
         return new ModelProfile(modelName, 8192, 1600, 2000, 3400, toolSupported);
     }

@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+/**
+ * Unit tests for {@link ThinkTags}: stripping complete and unbalanced reasoning blocks from model output.
+ */
 class ThinkTagsTest {
 
     @ParameterizedTest(name = "{0}")

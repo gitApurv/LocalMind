@@ -13,6 +13,10 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 
+/**
+ * Unit tests for {@link DocumentSearchTools}: user- and conversation-scoped search with formatted excerpts, empty
+ * results, missing context and blank queries, and invocation through its function callback.
+ */
 class DocumentSearchToolsTest {
 
     private TestVectorStore vectorStore;

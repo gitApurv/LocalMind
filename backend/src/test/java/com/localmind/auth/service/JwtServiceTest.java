@@ -16,6 +16,10 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 
+/**
+ * Unit tests for {@link JwtService}: access tokens carry the user's id, email and name claims with the configured
+ * lifetime.
+ */
 class JwtServiceTest {
 
     @Test

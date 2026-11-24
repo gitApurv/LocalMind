@@ -19,10 +19,8 @@ import org.springframework.web.client.RestClient;
 @RequiredArgsConstructor
 public class OllamaVersionCheck {
 
-    /** First release whose {@code /api/tags} reports model capabilities and context length. */
     static final String MINIMUM_VERSION = "0.30.0";
 
-    /** Version reported by Ollama builds made from source. */
     private static final String DEVELOPMENT_VERSION = "0.0.0";
 
     private final RestClient shortTimeoutRestClient;
@@ -44,7 +42,6 @@ public class OllamaVersionCheck {
         log.warn("{} Tools will not be offered for any model until then.", message);
     }
 
-    /** Returns {@code null} when the version cannot be read; the model catalogue reports an unreachable Ollama. */
     private String fetchVersion() {
         try {
             OllamaVersionResponse response = shortTimeoutRestClient.get()
@@ -59,10 +56,6 @@ public class OllamaVersionCheck {
         }
     }
 
-    /**
-     * Compares {@code major.minor.patch}, ignoring a leading {@code v} and any pre-release or build suffix. Versions
-     * that cannot be parsed and development builds pass, so an unusual version string never blocks startup.
-     */
     static boolean meetsMinimumVersion(String version) {
         int[] actual = parse(version);
         if (actual == null || DEVELOPMENT_VERSION.equals(version.strip())) {

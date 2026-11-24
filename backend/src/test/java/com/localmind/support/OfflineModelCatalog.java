@@ -5,8 +5,8 @@ import com.localmind.llm.service.ModelProfileRegistry;
 import org.springframework.web.client.RestClient;
 
 /**
- * {@link ModelCatalogService} that never calls Ollama: tool support comes from the profile registry only, so tests are
- * deterministic whether or not an Ollama instance runs on the machine.
+ * Test support: a {@link ModelCatalogService} that never calls Ollama. Tool support comes from the profile registry
+ * only, so tests are deterministic whether or not an Ollama instance runs on the machine.
  */
 public class OfflineModelCatalog extends ModelCatalogService {
 

@@ -6,6 +6,10 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.stereotype.Component;
 
+/**
+ * LLM tool {@code getCurrentDateTime}: lets the model read the current date, time, day of the week and the server's
+ * time zone.
+ */
 @Component
 public class DateTimeTools {
 

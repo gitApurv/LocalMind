@@ -4,7 +4,9 @@ import com.localmind.attachment.config.FileStorageProperties;
 import com.localmind.chat.config.PromptProperties;
 import com.localmind.llm.config.LlmProperties;
 
-/** Properties records with every default applied, for unit tests that do not bind configuration. */
+/**
+ * Test support: properties records with every default applied, for unit tests that do not bind configuration.
+ */
 public final class TestProperties {
 
     private TestProperties() {

@@ -17,6 +17,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * REST endpoints for a user's long-term memories under {@code /api/memories}: list, pin or unpin, and delete.
+ */
 @RestController
 @RequestMapping("/api/memories")
 @RequiredArgsConstructor

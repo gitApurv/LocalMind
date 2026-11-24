@@ -7,6 +7,10 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.stereotype.Component;
 
+/**
+ * LLM tool {@code calculateExpression}: lets the model evaluate a mathematical expression (via exp4j) instead of doing
+ * the arithmetic itself. Invalid input and division by zero come back as readable error strings.
+ */
 @Slf4j
 @Component
 public class MathTools {
@@ -37,7 +41,6 @@ public class MathTools {
         }
     }
 
-    /** Whole numbers are rendered without a fractional part. */
     private static String format(double result) {
         if (Double.isNaN(result)) {
             return "Error: Mathematical result is NaN (Not a Number).";

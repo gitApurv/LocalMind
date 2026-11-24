@@ -14,6 +14,10 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
+/**
+ * Unit tests for {@link WebSearchTools}: querying SearXNG and parsing results, blank queries without an HTTP call,
+ * reporting an unreachable instance, no-result messages and invocation through its function callback.
+ */
 class WebSearchToolsTest {
 
     private WebSearchTools webSearchTools;

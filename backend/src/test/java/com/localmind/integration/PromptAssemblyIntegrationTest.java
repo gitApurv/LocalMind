@@ -15,6 +15,11 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 
+/**
+ * Integration tests for prompt assembly through a {@code ChatClient} advisor chain: the system message reaches the
+ * model and the response comes back through two ordered advisors. Uses a mocked {@code ChatModel}, so no Ollama is
+ * needed.
+ */
 class PromptAssemblyIntegrationTest {
     @Test
     void goldenPromptAssembledInCorrectSectionOrder() {

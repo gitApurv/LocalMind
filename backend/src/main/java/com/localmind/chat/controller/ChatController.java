@@ -14,6 +14,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
+/**
+ * REST endpoints for streaming a chat turn under {@code /api/chat}. {@code POST /api/chat/stream} answers with
+ * server-sent {@link ChatEvent}s.
+ */
 @RestController
 @RequestMapping("/api/chat")
 @RequiredArgsConstructor

@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/** REST endpoints for the installed chat model catalogue under {@code /api/models}. */
 @RestController
 @RequestMapping("/api/models")
 @RequiredArgsConstructor

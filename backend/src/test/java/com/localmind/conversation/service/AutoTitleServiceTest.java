@@ -22,6 +22,10 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
+/**
+ * Unit tests for {@link AutoTitleService}: title generation with quote, prefix and reasoning-block cleanup, skipping
+ * customised titles, and apostrophe-safe title cleaning.
+ */
 @ExtendWith(MockitoExtension.class)
 class AutoTitleServiceTest {
 

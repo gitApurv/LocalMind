@@ -20,6 +20,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * REST endpoints for a user's conversations and their message history under {@code /api/conversations}.
+ */
 @RestController
 @RequestMapping("/api/conversations")
 @RequiredArgsConstructor

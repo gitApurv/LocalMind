@@ -17,7 +17,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * Folds history turns that no longer fit the context window into a rolling conversation summary. Turns at or before
- * {@link Conversation#getSummarizedThrough()} are already part of the summary and are skipped.
+ * {@link Conversation#getSummarizedThrough()} are already part of the summary and are skipped. Runs asynchronously and
+ * stores the result through a conditional update, so a slower, older job never overwrites a newer summary.
  */
 @Slf4j
 @Service
@@ -31,10 +32,6 @@ public class ConversationSummaryService {
     private final ConversationRepository conversationRepository;
     private final LlmProperties llmProperties;
 
-    /**
-     * @param droppedTurns
-     *            turns trimmed from the prompt, oldest first
-     */
     @Async
     public void summarizeDroppedTurnsAsync(String conversationId, List<ChatMessage> droppedTurns, String modelName) {
         if (conversationId == null || droppedTurns == null || droppedTurns.isEmpty()) {

@@ -2,7 +2,17 @@ package com.localmind.chat.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
-/** A server-sent event emitted while a chat response streams. */
+/**
+ * One server-sent event in the {@code POST /api/chat/stream} response. Fields that do not apply to the event type are
+ * {@code null} and omitted from the JSON.
+ *
+ * @param content
+ *            streamed text for {@code CONTENT} and {@code REASONING}, the user-facing message for {@code ERROR}
+ * @param tool
+ *            tool name for {@code TOOL_START} and {@code TOOL_END}
+ * @param messageId
+ *            id of the saved assistant message, sent with {@code DONE}
+ */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ChatEvent(EventType type, String content, String tool, String messageId) {
 

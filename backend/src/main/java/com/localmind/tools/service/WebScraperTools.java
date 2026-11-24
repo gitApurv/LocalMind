@@ -38,8 +38,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * Fetches a web page and returns its readable text. Requests to loopback and private networks are blocked (SSRF guard)
- * unless explicitly allowed.
+ * LLM tool {@code readWebPage}: lets the model fetch a web page and read its text, cut to 4,000 characters. Requests to
+ * loopback and private networks are blocked (SSRF guard) unless explicitly allowed.
  * <p>
  * The guard lives in the HTTP client's DNS resolver: the addresses it validates are the only ones the connection may
  * use. Checking a host and then letting the HTTP library resolve it again would let a DNS server answer the check with
@@ -71,12 +71,10 @@ public class WebScraperTools {
         this(properties, WebScraperTools::isRestrictedAddress);
     }
 
-    /** Lets tests substitute the address rule, e.g. to reach a loopback test server but still block 10/8. */
     WebScraperTools(WebScraperProperties properties, Predicate<InetAddress> restrictedAddress) {
         this(properties, restrictedAddress, InetAddress::getAllByName);
     }
 
-    /** Lets tests substitute DNS, e.g. to answer the same host differently on successive lookups. */
     WebScraperTools(WebScraperProperties properties, Predicate<InetAddress> restrictedAddress, HostLookup hostLookup) {
         this.properties = properties;
         this.restrictedAddress = restrictedAddress;
@@ -84,7 +82,6 @@ public class WebScraperTools {
         this.httpClient = buildHttpClient(new GuardedDnsResolver());
     }
 
-    /** Resolves a host name to its addresses; {@link InetAddress#getAllByName} in production. */
     @FunctionalInterface
     interface HostLookup {
         InetAddress[] lookup(String host) throws UnknownHostException;
@@ -117,7 +114,6 @@ public class WebScraperTools {
         }
     }
 
-    /** Outcome of one request: either a redirect target or the final text for the model. */
     private record Hop(String redirectTo, String text) {
     }
 
@@ -142,7 +138,6 @@ public class WebScraperTools {
         return new Hop(null, extractText(url, parse(url, entity, contentType)));
     }
 
-    /** Reads at most {@link #MAX_BODY_BYTES}; longer bodies are truncated, like a browser that stops reading. */
     private static Document parse(String url, HttpEntity entity, ContentType contentType) throws IOException {
         byte[] body;
         try (InputStream in = entity.getContent()) {
@@ -153,7 +148,6 @@ public class WebScraperTools {
         return Jsoup.parse(new ByteArrayInputStream(body), charsetName, url);
     }
 
-    /** Same rule Jsoup applied before: no type, any {@code text/*}, or an XML type. */
     private static boolean isTextual(ContentType contentType) {
         if (contentType == null || contentType.getMimeType() == null) {
             return true;
@@ -183,7 +177,6 @@ public class WebScraperTools {
         }
     }
 
-    /** Returns an error message when the URL may not be fetched, or {@code null} when it is allowed. */
     private static String validateTarget(String url) {
         String lowerUrl = url.toLowerCase(Locale.ROOT);
         if (!lowerUrl.startsWith("http://") && !lowerUrl.startsWith("https://")) {
@@ -202,10 +195,6 @@ public class WebScraperTools {
         return null;
     }
 
-    /**
-     * The only source of addresses for the HTTP client. With the guard active it rejects a host when any of its
-     * addresses is restricted, so the connection can never reach an address that was not checked.
-     */
     private final class GuardedDnsResolver implements DnsResolver {
 
         @Override
@@ -239,7 +228,6 @@ public class WebScraperTools {
         }
     }
 
-    /** Raised by the resolver for a restricted address; a subtype of the exception HttpClient expects from DNS. */
     private static final class BlockedHostException extends UnknownHostException {
 
         BlockedHostException(String host) {
@@ -280,14 +268,6 @@ public class WebScraperTools {
         return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
     }
 
-    /**
-     * Addresses a model-chosen URL may never reach: loopback, private (RFC 1918), link-local, unspecified, multicast,
-     * {@code 0.0.0.0/8}, carrier-grade NAT ({@code 100.64.0.0/10}), IETF protocol assignments ({@code 192.0.0.0/24}),
-     * benchmarking ({@code 198.18.0.0/15}), reserved and broadcast ({@code 240.0.0.0/4}), IPv6 unique-local
-     * ({@code fc00::/7}) and Teredo ({@code 2001::/32}). IPv6 forms that carry an IPv4 address (IPv4-mapped,
-     * IPv4-compatible, NAT64 {@code 64:ff9b::/96}, 6to4 {@code 2002::/16}) are judged by that IPv4 address; the
-     * local-use NAT64 prefix {@code 64:ff9b:1::/48} is always blocked.
-     */
     static boolean isRestrictedAddress(InetAddress address) {
         if (address.isLoopbackAddress() || address.isSiteLocalAddress() || address.isLinkLocalAddress()
                 || address.isAnyLocalAddress() || address.isMulticastAddress()) {

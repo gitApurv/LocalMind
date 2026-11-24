@@ -4,7 +4,10 @@ import lombok.Getter;
 import org.springframework.http.HttpStatus;
 
 /**
- * Base type for business errors that map to a specific HTTP status. Rendered by {@link GlobalExceptionHandler}.
+ * Base of the business exceptions that map to a specific HTTP status: {@link BadRequestException} (400),
+ * {@link UnauthorizedException} (401), {@link ResourceNotFoundException} (404) and {@link ConflictException} (409).
+ * Rendered by {@link GlobalExceptionHandler}, which sends the exception message to the client, so messages must be
+ * fixed, user-facing text.
  */
 @Getter
 public abstract class ApiException extends RuntimeException {

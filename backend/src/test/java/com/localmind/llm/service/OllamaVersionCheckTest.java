@@ -19,6 +19,10 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
+/**
+ * Unit tests for {@link OllamaVersionCheck}: minimum-version comparison, failing or only warning on an old Ollama
+ * depending on model validation, and skipping an unreachable Ollama.
+ */
 class OllamaVersionCheckTest {
 
     private static final String BASE_URL = "http://localhost:11434";

@@ -12,7 +12,10 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Service;
 
-/** Issues signed access tokens. Validation is handled by the Spring Security resource server. */
+/**
+ * Issues signed access tokens carrying the user's id, email and full name. Validation is handled by the Spring Security
+ * resource server configured in {@link SecurityConfig}.
+ */
 @Service
 @RequiredArgsConstructor
 public class JwtService {

@@ -11,6 +11,10 @@ import com.localmind.attachment.repository.AttachmentRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+/**
+ * Unit tests for {@link InterruptedIngestionRecovery}: marking attachments left PROCESSING by a restart as FAILED
+ * without blocking startup when the database is down.
+ */
 class InterruptedIngestionRecoveryTest {
 
     private final AttachmentRepository repository = mock(AttachmentRepository.class);

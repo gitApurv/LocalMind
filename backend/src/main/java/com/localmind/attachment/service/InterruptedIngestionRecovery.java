@@ -9,9 +9,10 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 /**
- * Document processing runs in memory ({@code @Async}), so a restart abandons any attachment still being processed and
- * it would stay {@code PROCESSING} forever, with the frontend polling it. At startup no job is running yet, so every
- * such attachment is marked failed and the user can upload it again. LocalMind runs as a single instance.
+ * Marks attachments left {@code PROCESSING} by a restart as {@code FAILED} at startup. Document processing runs in
+ * memory ({@code @Async}), so a restart abandons any attachment still being processed and it would stay
+ * {@code PROCESSING} forever, with the frontend polling it. At startup no job is running yet, so every such attachment
+ * is failed and the user can upload it again. LocalMind runs as a single instance.
  */
 @Slf4j
 @Service

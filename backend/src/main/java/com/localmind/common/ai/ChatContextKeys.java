@@ -16,9 +16,6 @@ public final class ChatContextKeys {
     private ChatContextKeys() {
     }
 
-    /**
-     * Returns the non-blank string stored under {@code key}, or {@code null}.
-     */
     public static String getString(Map<String, ?> context, String key) {
         if (context == null) {
             return null;
