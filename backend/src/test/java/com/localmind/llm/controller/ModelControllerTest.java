@@ -12,7 +12,7 @@ import com.localmind.common.security.CorsProperties;
 import com.localmind.common.security.JwtProperties;
 import com.localmind.common.security.SecurityConfig;
 import com.localmind.llm.config.LlmProperties;
-import com.localmind.llm.dto.ModelInfo;
+import com.localmind.llm.dto.ModelInfoResponse;
 import com.localmind.llm.dto.ModelResponse;
 import com.localmind.llm.service.ModelCatalogService;
 import java.util.List;
@@ -28,6 +28,10 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.client.RestClient;
 
+/**
+ * MockMvc tests for {@link ModelController}: 401 without authentication and the model list for an authenticated caller.
+ * Runs as a {@code @WebMvcTest} slice with the real security configuration and a mocked catalogue.
+ */
 @WebMvcTest(ModelController.class)
 @ActiveProfiles("test")
 @Import(ModelControllerTest.TestConfig.class)
@@ -64,7 +68,7 @@ class ModelControllerTest {
     @DisplayName("GET /api/models authenticated should return available models list")
     void listModelsAuthenticated() throws Exception {
         when(modelCatalogService.listAvailableModels()).thenReturn(
-                new ModelResponse(List.of(new ModelInfo("test-model", "test-model", 100L, "2026-01-01", true)),
+                new ModelResponse(List.of(new ModelInfoResponse("test-model", "test-model", 100L, "2026-01-01", true)),
                         "test-model"));
 
         mockMvc.perform(

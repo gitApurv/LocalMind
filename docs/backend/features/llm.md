@@ -25,9 +25,10 @@ request.
 | [`ModelController`](../../../backend/src/main/java/com/localmind/llm/controller/ModelController.java) | controller | `GET /api/models` |
 | [`ModelCatalogService`](../../../backend/src/main/java/com/localmind/llm/service/ModelCatalogService.java) | service | Ollama `/api/tags` fetch, startup validation, cache with TTL and retry throttle, tool-support lookup, default model |
 | [`OllamaVersionCheck`](../../../backend/src/main/java/com/localmind/llm/service/OllamaVersionCheck.java) | service | Startup check that Ollama is 0.30.0 or later (`GET /api/version`) |
-| [`ModelProfileRegistry`](../../../backend/src/main/java/com/localmind/llm/service/ModelProfileRegistry.java) | service | In-memory `ConcurrentHashMap` of `ModelProfile` by lower-cased model name |
+| [`ModelProfileRegistry`](../../../backend/src/main/java/com/localmind/llm/service/ModelProfileRegistry.java) | service | In-memory `ConcurrentHashMap` of `ModelProfile` keyed by `ModelNames.canonical` |
 | [`ModelProfile`](../../../backend/src/main/java/com/localmind/llm/model/ModelProfile.java) | model | Token budgets and tool capability of one model |
-| [`ModelInfo`](../../../backend/src/main/java/com/localmind/llm/dto/ModelInfo.java) | dto | One installed model in the `/api/models` response |
+| [`ModelNames`](../../../backend/src/main/java/com/localmind/llm/model/ModelNames.java) | model | The one model-name matching rule (`matches`, `canonical`) and the `LATEST_TAG` constant |
+| [`ModelInfoResponse`](../../../backend/src/main/java/com/localmind/llm/dto/ModelInfoResponse.java) | dto | One installed model in the `/api/models` response |
 | [`ModelResponse`](../../../backend/src/main/java/com/localmind/llm/dto/ModelResponse.java) | dto | `/api/models` response: models + default model |
 | [`LlmProperties`](../../../backend/src/main/java/com/localmind/llm/config/LlmProperties.java) | config | `localmind.llm.*`; `resolveModel(String...)` |
 
@@ -49,8 +50,9 @@ Constants: `CACHE_TTL = 5 min`, `RETRY_INTERVAL = 30 s`.
 - With Ollama down and no list loaded yet, the response is
   `{"models": [], "defaultModel": "<localmind.llm.default-model>"}`; Ollama is retried at most every 30 s (5 s
   connect/read timeout, loads serialized by `synchronized`).
-- `defaultModel` is the installed model matching `localmind.llm.default-model` (by `name` or `model`,
-  case-insensitive, returned as the installed `name`); if none matches, the first installed chat model; if none is
+- `defaultModel` is the installed model matching `localmind.llm.default-model` (by `name` or `model`, using the
+  model-name rule in business rule 3, returned as the installed `name`: `llama3.2` configured with `llama3.2:latest`
+  installed reports `llama3.2:latest`); if none matches, the first installed chat model; if none is
   installed, the configured value.
 - Models are returned in the order Ollama lists them.
 
@@ -110,8 +112,8 @@ Resulting profiles (no hard-coded profiles exist; these are the only shapes prod
 
 | Record | Fields | Validation |
 | --- | --- | --- |
-| `ModelInfo` | `String name`, `String model`, `Long size`, `String modifiedAt`, `boolean supportsTools` | none |
-| `ModelResponse` | `List<ModelInfo> models`, `String defaultModel` (extra constructor with `defaultModel = null`) | none |
+| `ModelInfoResponse` | `String name`, `String model`, `Long size`, `String modifiedAt`, `boolean supportsTools` | none |
+| `ModelResponse` | `List<ModelInfoResponse> models`, `String defaultModel` | none |
 
 ## Business rules
 
@@ -134,22 +136,23 @@ Resulting profiles (no hard-coded profiles exist; these are the only shapes prod
    (startup fails because it is thrown from `@PostConstruct`); otherwise logs a warning and, if no cache exists yet,
    caches `([], defaultModel)`. An existing cache is kept.
 3. **Validation** (only in `refreshCatalog` when `validate-models-on-startup` is true, never on request-time reloads): both
-   `default-model` and `default-embedding-model` must be in the tag list, else `IllegalStateException`. Matching is
-   case-insensitive against tag `name` or `model`, accepting the target as given, with `:latest` appended (if it has no
-   tag), or with a trailing `:latest` removed.
+   `default-model` and `default-embedding-model` must be in the tag list, else `IllegalStateException`. A tag matches
+   when its `name` or `model` matches the target by the **model-name rule** (`ModelNames.matches`), which validation,
+   the default model and `supportsTools` all use: case-insensitive and trimmed, a bare name equals its `:latest` tag
+   in both directions (`llama3.2` ↔ `llama3.2:latest`), other tags never match (`qwen2.5` ≠ `qwen2.5:7b`), and a
+   `null` or blank name (for example a tag without a `model` field) never matches.
 4. **Chat-capable filter**: a tag is kept if its `capabilities` list is null/empty or contains `"completion"`. Tags
    with only `"embedding"` are excluded from `/api/models` and from the registry.
 5. **Tool support**: `supportsTools = capabilities contains "tools"`.
 6. **Profiles**: each kept tag registers `fromOllama(name, details.context_length, toolSupport)`, plus a second profile
-   under `model` if it differs from `name`. Registry keys are trimmed and lower-cased; re-registration overwrites;
-   profiles are never removed.
+   under `model` if it differs from `name`. Registry keys are `ModelNames.canonical(name)` (trimmed, lower-cased,
+   trailing `:latest` removed); re-registration overwrites; profiles are never removed.
 7. **`ModelProfileRegistry.getProfile(name)`**: a null/blank name returns `generic("default", false)`. Otherwise the
-   trimmed, lower-cased name is looked up exactly; a bare name (no `:`) also matches its `:latest` key (so
-   `custom-model` finds `custom-model:latest`, but `qwen2.5` does not find `qwen2.5:7b`); else
+   canonical name is looked up, so the model-name rule applies (`custom-model` finds `custom-model:latest` and
+   vice versa, but `qwen2.5` does not find `qwen2.5:7b`); else
    `generic(<trimmed name>, false)`. There is no prefix matching.
-8. **`supportsTools(name)`**: `false` for null/blank. Otherwise, after `refreshIfStale()`, the first cached `ModelInfo`
-   whose `name` or `model` equals the trimmed name, or the trimmed name + `:latest` (case-insensitive), decides; other
-   tags of the same model never match. If none matches, falls back to `getProfile(name).toolSupported()` (`false` for
+8. **`supportsTools(name)`**: `false` for null/blank. Otherwise, after `refreshIfStale()`, the first cached
+   `ModelInfoResponse` whose `name` or `model` matches by the model-name rule decides. If none matches, falls back to `getProfile(name).toolSupported()` (`false` for
    unknown models).
 9. **`LlmProperties.resolveModel(candidates...)`**: first non-blank candidate, trimmed; else `default-model`. Never
    returns blank.
@@ -189,8 +192,8 @@ flowchart TD
 | --- | --- | --- | --- |
 | `localmind.llm.default-model` | `OLLAMA_CHAT_MODEL` | `gemma3:1b` (yml and compact constructor; blank → default, trimmed) | Model used when a request/conversation names none; required at startup when validating; preferred `defaultModel` in `/api/models`. Same variable as `spring.ai.ollama.chat.options.model` |
 | `localmind.llm.default-embedding-model` | `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` (blank → default, trimmed) | Only used for startup validation here; Spring AI's embedding model comes from `spring.ai.ollama.embedding.options.model` (same variable) |
-| `localmind.llm.ollama-base-url` | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` (null → default; trailing `/` stripped) | Base of the `/api/tags` call. Same variable as `spring.ai.ollama.base-url` |
-| `localmind.llm.validate-models-on-startup` | `VALIDATE_MODELS_ON_STARTUP` | `true` in `application.yml`; `false` if the key is absent (primitive `boolean`); `false` in `application-test.yml` | Fail fast when Ollama is unreachable, older than 0.30.0 or missing required models; when `false`, only warn |
+| `localmind.llm.ollama-base-url` | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` (null/blank → default; trimmed, trailing `/` stripped) | Base of the `/api/tags` call. Same variable as `spring.ai.ollama.base-url` |
+| `localmind.llm.validate-models-on-startup` | `VALIDATE_MODELS_ON_STARTUP` | `true` (`application.yml`, and the compact constructor when the key is absent: `Boolean`, `null` → `true`); `false` in `application-test.yml` | Fail fast when Ollama is unreachable, older than 0.30.0 or missing required models; when `false`, only warn |
 
 ## Errors
 
@@ -217,9 +220,11 @@ No `ApiException` is thrown by this feature.
 | Test class | What it covers |
 | --- | --- |
 | [`ModelControllerTest`](../../../backend/src/test/java/com/localmind/llm/controller/ModelControllerTest.java) | `@WebMvcTest`: 401 without token; authenticated response shape (`models[0].name`, `supportsTools`, `defaultModel`) |
-| [`ModelCatalogServiceTest`](../../../backend/src/test/java/com/localmind/llm/service/ModelCatalogServiceTest.java) | `isToolCapable`; `IllegalStateException` when Ollama is unreachable with validation on; missing chat / embedding model; a mocked `/api/tags` (`MockRestServiceServer`) parsed into models, default model, tool support and context-length profiles with the embedding-only model skipped; a bare name matches only its `:latest` tag (`qwen2.5` does not match `qwen2.5:7b`); a request-time reload with validation on never throws and is not retried within 30 s |
+| [`ModelCatalogServiceTest`](../../../backend/src/test/java/com/localmind/llm/service/ModelCatalogServiceTest.java) | `isToolCapable`; `IllegalStateException` when Ollama is unreachable with validation on; missing chat / embedding model; a mocked `/api/tags` (`MockRestServiceServer`) parsed into models, default model, tool support and context-length profiles with the embedding-only model skipped; a bare name matches only its `:latest` tag (`qwen2.5` does not match `qwen2.5:7b`); validation accepts a bare name for an installed `:latest` tag and vice versa but not another tag; a bare default model resolves to the installed `:latest` name and a `:latest` default to a bare installed name; a tag without a `model` field neither breaks the default model nor `supportsTools`; an unmatched default falls back to the first installed chat model; a request-time reload with validation on never throws and is not retried within 30 s |
 | [`OllamaVersionCheckTest`](../../../backend/src/test/java/com/localmind/llm/service/OllamaVersionCheckTest.java) | Version comparison (old, current, `v` prefix, pre-release, dev build, garbage); startup failure vs warning for an old Ollama; supported version passes; unreadable version skipped |
-| [`ModelProfileRegistryTest`](../../../backend/src/test/java/com/localmind/llm/service/ModelProfileRegistryTest.java) | Register/retrieve, untagged name matches `:latest`, unknown model gets generic 8192 profile, blank name gets `generic("default", false)` even with profiles registered, bare name does not match a non-`:latest` tag |
+| [`ModelProfileRegistryTest`](../../../backend/src/test/java/com/localmind/llm/service/ModelProfileRegistryTest.java) | Register/retrieve, untagged name matches `:latest`, unknown model gets generic 8192 profile, blank name gets `generic("default", false)` even with profiles registered, bare name does not match a non-`:latest` tag, a `:latest` lookup finds a profile registered under the bare name |
+| [`ModelNamesTest`](../../../backend/src/test/java/com/localmind/llm/model/ModelNamesTest.java) | Bare name ↔ `:latest` both ways, other tags never match, null/blank never match, `canonical` |
+| [`LlmPropertiesTest`](../../../backend/src/test/java/com/localmind/llm/config/LlmPropertiesTest.java) | Defaults for absent values (validation on), blank `ollama-base-url` → default, URL trimmed without trailing `/`, binding without the key keeps validation on |
 | [`OfflineModelCatalog`](../../../backend/src/test/java/com/localmind/support/OfflineModelCatalog.java) | Test double (not a test): `supportsTools` from the registry only, used by `ToolSelectorTest` and `ChatOrchestratorServiceTest` |
 
-Not covered: reload after `CACHE_TTL` expiry, and default-model fallback to the first installed model.
+Not covered: reload after `CACHE_TTL` expiry.

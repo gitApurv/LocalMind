@@ -5,6 +5,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.localmind.llm.model.ModelProfile;
 import org.junit.jupiter.api.Test;
 
+/**
+ * Unit tests for {@link ModelProfileRegistry}: registering and retrieving profiles, tag-insensitive {@code :latest}
+ * matching, and the generic profile for unknown or blank names.
+ */
 class ModelProfileRegistryTest {
 
     private final ModelProfileRegistry registry = new ModelProfileRegistry();
@@ -60,5 +64,15 @@ class ModelProfileRegistryTest {
 
         assertEquals("qwen2.5", profile.modelName());
         assertFalse(profile.toolSupported());
+    }
+
+    @Test
+    void latestTagMatchesProfileRegisteredUnderBareName() {
+        registry.registerProfile(ModelProfile.fromOllama("mistral", 16384, true));
+
+        ModelProfile profile = registry.getProfile("Mistral:latest");
+
+        assertEquals("mistral", profile.modelName());
+        assertTrue(profile.toolSupported());
     }
 }
