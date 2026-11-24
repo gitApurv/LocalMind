@@ -1,35 +1,36 @@
 package com.localmind.attachment.storage;
 
 import com.localmind.attachment.config.FileStorageProperties;
+import com.localmind.attachment.entity.Attachment;
 import com.localmind.common.exception.ResourceNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 
 /**
- * Stores uploads under {@code <uploadDir>/<userId>/<attachmentId>_<sanitizedName>}.
+ * Stores uploads on local disk under {@code <uploadDir>/<userId>/<attachmentId>_<sanitizedName>}. File names are
+ * reduced to safe characters and every path is checked to stay inside the user's directory.
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class LocalDiskStorageService implements FileStorageService {
 
     private static final String UNSAFE_FILENAME_CHARS = "[^a-zA-Z0-9._-]";
     private static final String FALLBACK_FILENAME = "attachment";
 
-    private final Path rootLocation;
-
-    public LocalDiskStorageService(FileStorageProperties properties) {
-        this.rootLocation = Paths.get(properties.uploadDir()).toAbsolutePath().normalize();
-    }
+    private final FileStorageProperties properties;
 
     @Override
     public void store(InputStream inputStream, String userId, String attachmentId, String originalFileName) {
@@ -68,11 +69,11 @@ public class LocalDiskStorageService implements FileStorageService {
         }
     }
 
-    /** Builds the storage path and rejects anything that escapes the user's directory (directory traversal guard). */
     private Path resolveSafePath(String userId, String attachmentId, String originalFileName) {
         if (userId == null || userId.isBlank() || attachmentId == null || attachmentId.isBlank()) {
             throw new IllegalArgumentException("User ID and Attachment ID must not be blank");
         }
+        Path rootLocation = rootLocation();
         Path userDir = rootLocation.resolve(userId).normalize();
         Path targetPath = userDir.resolve(attachmentId + "_" + sanitizeFileName(originalFileName)).normalize();
         if (!userDir.startsWith(rootLocation) || !targetPath.startsWith(userDir)) {
@@ -81,10 +82,23 @@ public class LocalDiskStorageService implements FileStorageService {
         return targetPath;
     }
 
+    private Path rootLocation() {
+        return Paths.get(properties.uploadDir()).toAbsolutePath().normalize();
+    }
+
     private static String sanitizeFileName(String originalFileName) {
-        String rawName = originalFileName != null ? originalFileName : "unnamed";
-        String baseName = Paths.get(rawName).getFileName().toString();
+        String rawName = originalFileName != null ? originalFileName : Attachment.UNNAMED_FILE_NAME;
+        String baseName = baseName(rawName);
         String safeName = baseName.replaceAll(UNSAFE_FILENAME_CHARS, "_");
         return safeName.isBlank() ? FALLBACK_FILENAME : safeName;
+    }
+
+    private static String baseName(String rawName) {
+        try {
+            Path fileName = Paths.get(rawName).getFileName();
+            return fileName != null ? fileName.toString() : rawName;
+        } catch (InvalidPathException e) {
+            return rawName;
+        }
     }
 }

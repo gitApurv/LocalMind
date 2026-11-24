@@ -4,37 +4,38 @@ import com.localmind.attachment.config.FileStorageProperties;
 import com.localmind.attachment.dto.AttachmentResponse;
 import com.localmind.attachment.dto.UploadResponse;
 import com.localmind.attachment.entity.Attachment;
+import com.localmind.attachment.model.AttachmentDownload;
+import com.localmind.attachment.model.SupportedFileType;
 import com.localmind.attachment.repository.AttachmentRepository;
 import com.localmind.attachment.storage.FileStorageService;
 import com.localmind.common.exception.BadRequestException;
-import com.localmind.common.exception.ResourceNotFoundException;
 import com.localmind.common.transaction.TransactionHooks;
 import com.localmind.conversation.service.OwnershipGuard;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.core.io.Resource;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+/**
+ * Uploads, lists, serves and deletes a conversation's attachments, checking ownership with {@link OwnershipGuard}. An
+ * upload is validated, stored and saved as {@code PROCESSING}, then handed to {@link DocumentEtlService} after commit;
+ * a rolled-back upload deletes its stored file. Content types are derived from the file extension, never taken from the
+ * client.
+ */
 @Service
 @RequiredArgsConstructor
 public class AttachmentService {
 
-    private static final String UNNAMED_FILE = "unnamed";
-    /** Length of {@code attachments.file_name}. */
     static final int MAX_FILE_NAME_LENGTH = 255;
+    static final String ACCESS_DENIED_MESSAGE = "Access denied: Attachment does not belong to this conversation";
     private static final String OCTET_STREAM = "application/octet-stream";
-    /** Content types are derived from the extension, never taken from the client. */
-    private static final Map<String, String> CONTENT_TYPES = Map.of("pdf", "application/pdf", "txt", "text/plain",
-            "md", "text/markdown", "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
 
     private final AttachmentRepository attachmentRepository;
     private final FileStorageService fileStorageService;
@@ -44,12 +45,11 @@ public class AttachmentService {
 
     @Transactional
     public UploadResponse uploadAttachment(String conversationId, String userId, MultipartFile file) {
-        ownershipGuard.validateConversationOwnership(conversationId, userId);
+        ownershipGuard.lockOwnedConversation(conversationId, userId);
         validateUpload(file);
 
         String attachmentId = UUID.randomUUID().toString();
-        String fileName = Objects.requireNonNullElse(file.getOriginalFilename(), UNNAMED_FILE);
-        // Registered before storing so a copy that fails half-way is removed with the rolled-back row.
+        String fileName = originalFileName(file);
         TransactionHooks.onOutcome(() -> documentEtlService.processAttachment(attachmentId),
                 () -> fileStorageService.delete(userId, attachmentId, fileName));
         storeFile(file, userId, attachmentId, fileName);
@@ -70,17 +70,16 @@ public class AttachmentService {
     }
 
     @Transactional(readOnly = true)
-    public Attachment getAttachment(String conversationId, String attachmentId, String userId) {
+    public AttachmentDownload getAttachmentDownload(String conversationId, String attachmentId, String userId) {
         ownershipGuard.validateConversationOwnership(conversationId, userId);
-        return attachmentRepository.findByIdAndUserId(attachmentId, userId)
-                .filter(attachment -> attachment.getConversationId().equals(conversationId))
-                .orElseThrow(() -> new ResourceNotFoundException("Attachment not found"));
+        Attachment attachment = attachmentRepository.findById(attachmentId)
+                .filter(found -> found.getUserId().equals(userId) && found.getConversationId().equals(conversationId))
+                .orElseThrow(() -> new AccessDeniedException(ACCESS_DENIED_MESSAGE));
+        return new AttachmentDownload(
+                fileStorageService.loadAsResource(attachment.getUserId(), attachment.getId(), attachment.getFileName()),
+                attachment.getFileName(), contentTypeOf(attachment.getFileName()));
     }
 
-    /**
-     * Deletes every attachment of a conversation. Stored files and indexed chunks are removed only after the deletion
-     * commits, so a rollback never leaves rows pointing at missing files.
-     */
     @Transactional
     public void deleteConversationAttachments(String conversationId) {
         List<Attachment> attachments = attachmentRepository.findByConversationIdOrderByCreatedAtDesc(conversationId);
@@ -91,20 +90,9 @@ public class AttachmentService {
         TransactionHooks.afterCommit(() -> deleteStoredData(conversationId, attachments));
     }
 
-    /**
-     * The type a download is served with, from the file extension. Rows stored before types were derived on the server
-     * may hold a client-supplied type, so the stored value is not used.
-     */
-    public String contentTypeOf(Attachment attachment) {
-        return contentTypeOf(attachment.getFileName());
-    }
-
     private static String contentTypeOf(String fileName) {
-        return CONTENT_TYPES.getOrDefault(fileExtension(fileName).toLowerCase(Locale.ROOT), OCTET_STREAM);
-    }
-
-    public Resource loadAttachmentFile(Attachment attachment) {
-        return fileStorageService.loadAsResource(attachment.getUserId(), attachment.getId(), attachment.getFileName());
+        return SupportedFileType.fromExtension(fileExtension(fileName)).map(SupportedFileType::contentType)
+                .orElse(OCTET_STREAM);
     }
 
     private void validateUpload(MultipartFile file) {
@@ -115,7 +103,7 @@ public class AttachmentService {
             throw new BadRequestException(
                     "File exceeds maximum size limit of " + fileStorageProperties.maxFileSize().toMegabytes() + "MB");
         }
-        String originalName = Objects.requireNonNullElse(file.getOriginalFilename(), UNNAMED_FILE);
+        String originalName = originalFileName(file);
         if (originalName.length() > MAX_FILE_NAME_LENGTH) {
             throw new BadRequestException("File name must not exceed " + MAX_FILE_NAME_LENGTH + " characters");
         }
@@ -126,6 +114,10 @@ public class AttachmentService {
         }
     }
 
+    private static String originalFileName(MultipartFile file) {
+        return Objects.requireNonNullElse(file.getOriginalFilename(), Attachment.UNNAMED_FILE_NAME);
+    }
+
     private void storeFile(MultipartFile file, String userId, String attachmentId, String fileName) {
         try (InputStream inputStream = file.getInputStream()) {
             fileStorageService.store(inputStream, userId, attachmentId, fileName);
@@ -134,7 +126,6 @@ public class AttachmentService {
         }
     }
 
-    /** Returns the extension after the last dot, ignoring leading-dot names. */
     private static String fileExtension(String fileName) {
         if (fileName == null) {
             return "";

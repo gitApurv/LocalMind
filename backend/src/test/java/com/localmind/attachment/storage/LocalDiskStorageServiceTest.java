@@ -16,7 +16,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.core.io.Resource;
 
-class FileStorageServiceTest {
+/**
+ * Unit tests for {@link LocalDiskStorageService}: storing, loading and deleting files, and sanitising path-traversal
+ * and unparsable file names. Files are written to a JUnit temporary directory.
+ */
+class LocalDiskStorageServiceTest {
 
     @TempDir
     Path tempDir;
@@ -75,8 +79,22 @@ class FileStorageServiceTest {
 
         assertDoesNotThrow(() -> fileStorageService.store(inputStream, userId, attachmentId, maliciousFileName));
 
-        // The name was reduced to its last segment inside the user's own directory.
         assertTrue(Files.exists(tempDir.resolve("user-123").resolve("att-evil_secret.txt")));
         assertFalse(Files.exists(tempDir.resolve("secret.txt")));
+    }
+
+    @Test
+    @DisplayName("Names the OS cannot parse or that have no file segment are stored under a sanitized name")
+    void storesOddFileNames() throws Exception {
+        for (String fileName : new String[]{"bad\u0000name.txt", "/", "../../etc/passwd"}) {
+            String attachmentId = "att-" + Math.abs(fileName.hashCode());
+            fileStorageService.store(new ByteArrayInputStream("x".getBytes(StandardCharsets.UTF_8)), "user-1",
+                    attachmentId, fileName);
+
+            Resource resource = fileStorageService.loadAsResource("user-1", attachmentId, fileName);
+            assertTrue(resource.exists(), fileName);
+            Path stored = Path.of(resource.getURI());
+            assertTrue(stored.normalize().startsWith(tempDir.resolve("user-1").toAbsolutePath().normalize()), fileName);
+        }
     }
 }

@@ -2,7 +2,7 @@ package com.localmind.attachment.controller;
 
 import com.localmind.attachment.dto.AttachmentResponse;
 import com.localmind.attachment.dto.UploadResponse;
-import com.localmind.attachment.entity.Attachment;
+import com.localmind.attachment.model.AttachmentDownload;
 import com.localmind.attachment.service.AttachmentService;
 import com.localmind.common.security.CurrentUserId;
 import java.nio.charset.StandardCharsets;
@@ -23,6 +23,11 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+/**
+ * REST endpoints for a conversation's document attachments under
+ * {@code /api/conversations/{conversationId}/attachments}: upload, list and download. An upload returns
+ * {@code 202 Accepted} because the document is processed asynchronously.
+ */
 @RestController
 @RequestMapping("/api/conversations/{conversationId}/attachments")
 @RequiredArgsConstructor
@@ -46,13 +51,11 @@ public class AttachmentController {
     @GetMapping("/{attachmentId}/download")
     public ResponseEntity<Resource> downloadAttachment(@CurrentUserId String userId,
             @PathVariable("conversationId") String conversationId, @PathVariable("attachmentId") String attachmentId) {
-        Attachment attachment = attachmentService.getAttachment(conversationId, attachmentId, userId);
+        AttachmentDownload download = attachmentService.getAttachmentDownload(conversationId, attachmentId, userId);
         ContentDisposition disposition = ContentDisposition.attachment()
-                .filename(attachment.getFileName(), StandardCharsets.UTF_8).build();
-        MediaType mediaType = MediaType.parseMediaType(attachmentService.contentTypeOf(attachment));
-        String dispositionHeader = disposition.toString();
-        Resource file = attachmentService.loadAttachmentFile(attachment);
-        return ResponseEntity.ok().contentType(mediaType).header(HttpHeaders.CONTENT_DISPOSITION, dispositionHeader)
-                .header("X-Content-Type-Options", "nosniff").body(file);
+                .filename(download.fileName(), StandardCharsets.UTF_8).build();
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType(download.contentType()))
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+                .header("X-Content-Type-Options", "nosniff").body(download.resource());
     }
 }

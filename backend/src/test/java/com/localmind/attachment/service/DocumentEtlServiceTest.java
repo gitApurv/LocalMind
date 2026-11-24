@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 import com.localmind.attachment.entity.Attachment;
 import com.localmind.attachment.repository.AttachmentRepository;
 import com.localmind.attachment.storage.FileStorageService;
+import com.localmind.common.ai.VectorFilters;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -20,9 +21,15 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 
+/**
+ * Unit tests for {@link DocumentEtlService}: chunking and indexing with metadata, FAILED status on unreadable files,
+ * and chunk cleanup when indexing, recording READY or the attachment itself goes away. Uses an in-memory vector store
+ * instead of Qdrant.
+ */
 @ExtendWith(MockitoExtension.class)
 class DocumentEtlServiceTest {
 
@@ -37,10 +44,16 @@ class DocumentEtlServiceTest {
 
     static class TestVectorStore implements VectorStore {
         final List<Document> addedDocuments = new ArrayList<>();
+        final List<Filter.Expression> deleteFilters = new ArrayList<>();
         int filterDeletes;
+        boolean failAfterFirstDocument;
 
         @Override
         public void add(List<Document> documents) {
+            if (failAfterFirstDocument) {
+                addedDocuments.add(documents.getFirst());
+                throw new IllegalStateException("Qdrant unavailable");
+            }
             addedDocuments.addAll(documents);
         }
 
@@ -49,8 +62,9 @@ class DocumentEtlServiceTest {
         }
 
         @Override
-        public void delete(org.springframework.ai.vectorstore.filter.Filter.Expression filterExpression) {
+        public void delete(Filter.Expression filterExpression) {
             filterDeletes++;
+            deleteFilters.add(filterExpression);
         }
 
         @Override
@@ -139,5 +153,77 @@ class DocumentEtlServiceTest {
         verify(attachmentRepository, never()).save(any());
         assertFalse(vectorStore.addedDocuments.isEmpty());
         assertEquals(1, vectorStore.filterDeletes);
+    }
+
+    @Test
+    @DisplayName("processAttachment() should delete the chunks of the attachment when indexing fails part-way")
+    void partialIndexingFailureDeletesWrittenChunks() {
+        Attachment attachment = readableAttachment("att-partial");
+        vectorStore.failAfterFirstDocument = true;
+        when(attachmentRepository.updateOutcome(eq("att-partial"), eq(Attachment.Status.FAILED), eq(0), anyString()))
+                .thenReturn(1);
+
+        documentEtlService.processAttachment(attachment.getId());
+
+        assertFalse(vectorStore.addedDocuments.isEmpty());
+        assertEquals(List.of(VectorFilters.attachmentChunks(attachment.getUserId(), attachment.getId()).toString()),
+                vectorStore.deleteFilters.stream().map(Filter.Expression::toString).toList());
+        verify(attachmentRepository, never()).updateOutcome(any(), eq(Attachment.Status.READY), anyInt(), any());
+    }
+
+    @Test
+    @DisplayName("processAttachment() should delete the written chunks and record FAILED when recording READY fails")
+    void readyUpdateFailureDeletesChunksAndRecordsFailed() {
+        Attachment attachment = readableAttachment("att-ready-fails");
+        when(attachmentRepository.updateOutcome(eq("att-ready-fails"), eq(Attachment.Status.READY), anyInt(), isNull()))
+                .thenThrow(new IllegalStateException("deadlock"));
+        when(attachmentRepository.updateOutcome(eq("att-ready-fails"), eq(Attachment.Status.FAILED), eq(0),
+                anyString())).thenReturn(1);
+
+        documentEtlService.processAttachment(attachment.getId());
+
+        assertFalse(vectorStore.addedDocuments.isEmpty());
+        assertEquals(List.of(VectorFilters.attachmentChunks(attachment.getUserId(), attachment.getId()).toString()),
+                vectorStore.deleteFilters.stream().map(Filter.Expression::toString).toList());
+        verify(attachmentRepository).updateOutcome(eq("att-ready-fails"), eq(Attachment.Status.FAILED), eq(0),
+                anyString());
+    }
+
+    @Test
+    @DisplayName("processAttachment() should never throw when the FAILED status cannot be recorded either")
+    void failedUpdateFailureIsSwallowed() {
+        Attachment attachment = readableAttachment("att-db-down");
+        when(attachmentRepository.updateOutcome(eq("att-db-down"), any(), anyInt(), any()))
+                .thenThrow(new IllegalStateException("database down"));
+
+        assertDoesNotThrow(() -> documentEtlService.processAttachment(attachment.getId()));
+
+        verify(attachmentRepository).updateOutcome(eq("att-db-down"), eq(Attachment.Status.FAILED), eq(0),
+                anyString());
+        assertEquals(1, vectorStore.filterDeletes);
+    }
+
+    @Test
+    @DisplayName("The chunk delete filter is scoped to the attachment's owner, id and document type")
+    void attachmentChunksFilterScopesToOneAttachment() {
+        Attachment attachment = Attachment.builder().id("att-1").conversationId("conv-1").userId("user-1")
+                .fileName("a.txt").build();
+
+        String filter = VectorFilters.attachmentChunks(attachment.getUserId(), attachment.getId()).toString();
+
+        assertTrue(filter.contains("userId") && filter.contains("user-1"));
+        assertTrue(filter.contains("attachmentId") && filter.contains("att-1"));
+        assertTrue(filter.contains("DOC_CHUNK"));
+        assertFalse(filter.contains("conversationId"));
+    }
+
+    private Attachment readableAttachment(String attachmentId) {
+        Attachment attachment = Attachment.builder().id(attachmentId).conversationId("conv-1").userId("user-1")
+                .fileName("doc.txt").status(Attachment.Status.PROCESSING).build();
+        when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.of(attachment));
+        String text = "LocalMind keeps documents local. It indexes them in Qdrant for retrieval augmented generation.";
+        when(fileStorageService.loadAsResource("user-1", attachmentId, "doc.txt"))
+                .thenReturn(new ByteArrayResource(text.getBytes(StandardCharsets.UTF_8)));
+        return attachment;
     }
 }

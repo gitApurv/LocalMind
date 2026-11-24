@@ -16,9 +16,12 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/**
+ * JPA entity for table {@code attachments}: one document uploaded to a conversation, with its ingestion status. The
+ * file itself lives in file storage and its text chunks in the vector store.
+ */
 @Entity
 @Table(name = "attachments", indexes = {
-        // Attachment list, READY check before every chat turn, and conversation delete.
         @Index(name = "idx_attachments_conversation_created", columnList = "conversation_id, created_at")})
 @Getter
 @Setter
@@ -28,8 +31,10 @@ import lombok.Setter;
 public class Attachment {
 
     public enum Status {
-        PENDING, PROCESSING, READY, FAILED
+        PROCESSING, READY, FAILED
     }
+
+    public static final String UNNAMED_FILE_NAME = "unnamed";
 
     @Id
     @Column(name = "id", length = 36, nullable = false)
@@ -53,7 +58,7 @@ public class Attachment {
     @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
-    private Status status = Status.PENDING;
+    private Status status = Status.PROCESSING;
 
     @Builder.Default
     @Column(name = "chunk_count")
