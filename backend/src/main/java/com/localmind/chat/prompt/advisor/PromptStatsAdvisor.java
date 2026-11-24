@@ -1,7 +1,9 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.advisor;
 
 import com.localmind.chat.config.PromptProperties;
-import com.localmind.llm.model.ModelProfile;
+import com.localmind.chat.prompt.PromptAdvisor;
+import com.localmind.chat.prompt.token.TokenCounter;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
@@ -9,23 +11,18 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.stereotype.Component;
 
 /**
- * Step 5: logs the token distribution of the final prompt and warns when it exceeds the model's context window. Never
- * modifies the request.
+ * Prompt step 5 (order 500): logs the token distribution of the final prompt and warns when it exceeds the model's
+ * context window. Never modifies the request. Switched off by {@code localmind.prompt.stats.enabled}.
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class PromptStatsAdvisor implements PromptAdvisor {
 
     private static final int ORDER = 500;
-    private static final int DEFAULT_NUM_CTX = 8192;
 
     private final TokenCounter tokenCounter;
-    private final boolean enabled;
-
-    public PromptStatsAdvisor(TokenCounter tokenCounter, PromptProperties properties) {
-        this.tokenCounter = tokenCounter;
-        this.enabled = properties.stats().enabled();
-    }
+    private final PromptProperties properties;
 
     @Override
     public int getOrder() {
@@ -34,7 +31,7 @@ public class PromptStatsAdvisor implements PromptAdvisor {
 
     @Override
     public ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain) {
-        if (!enabled || request == null || request.prompt() == null) {
+        if (!properties.stats().enabled() || request == null || request.prompt() == null) {
             return request;
         }
 
@@ -53,8 +50,7 @@ public class PromptStatsAdvisor implements PromptAdvisor {
         }
 
         int totalTokens = systemTokens + userTokens + assistantTokens + otherTokens;
-        ModelProfile profile = PromptAdvisor.modelProfile(request);
-        int numCtx = profile != null ? profile.numCtx() : DEFAULT_NUM_CTX;
+        int numCtx = PromptAdvisor.budgetProfile(request).numCtx();
         log.info("Prompt assembled: total={} tokens / ctx={} (system={}, history/assistant={}, user={}, other={})",
                 totalTokens, numCtx, systemTokens, assistantTokens, userTokens, otherTokens);
         if (totalTokens > numCtx) {

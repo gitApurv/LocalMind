@@ -1,8 +1,12 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.advisor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import com.localmind.chat.prompt.history.HistoryTrimmer;
+import com.localmind.chat.prompt.history.ToolNoteRenderer;
+import com.localmind.chat.prompt.token.CharacterTokenCounter;
+import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.conversation.entity.ChatMessage;
 import com.localmind.conversation.entity.Conversation;
 import com.localmind.conversation.repository.ChatMessageRepository;
@@ -20,6 +24,10 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Unit tests for {@link HistoryAdvisor}: summary prepended, message order around the system and current turn, dropped
+ * turns sent for summarising, and graceful fallback when history or the summary job fails.
+ */
 class HistoryAdvisorTest {
     private final ChatMessageRepository chatMessageRepository = mock(ChatMessageRepository.class);
     private final ConversationRepository conversationRepository = mock(ConversationRepository.class);

@@ -1,6 +1,9 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.advisor;
 
 import com.localmind.chat.config.PromptProperties;
+import com.localmind.chat.prompt.PromptAdvisor;
+import com.localmind.chat.prompt.history.HistoryTrimmer;
+import com.localmind.chat.prompt.history.TrimmedHistory;
 import com.localmind.common.ai.ChatContextKeys;
 import com.localmind.conversation.entity.ChatMessage;
 import com.localmind.conversation.entity.Conversation;
@@ -11,6 +14,7 @@ import com.localmind.llm.model.ModelProfile;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
@@ -22,32 +26,23 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Component;
 
 /**
- * Step 4: inserts the rolling summary and the token-trimmed conversation history (excluding the current user message)
- * between the system message and the current user message. Turns that no longer fit are handed to
- * {@link ConversationSummaryService} so they live on in the summary.
+ * Prompt step 4 (order 400): inserts the rolling summary and the token-trimmed conversation history (excluding the
+ * current user message) between the system message and the current user message. Turns that no longer fit are handed to
+ * {@link ConversationSummaryService} so they live on in the summary. Switched off by
+ * {@code localmind.prompt.history.token-trim}.
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class HistoryAdvisor implements PromptAdvisor {
 
     private static final int ORDER = 400;
-    private static final int DEFAULT_HISTORY_BUDGET = 3400;
 
     private final ChatMessageRepository chatMessageRepository;
     private final ConversationRepository conversationRepository;
     private final HistoryTrimmer historyTrimmer;
     private final ConversationSummaryService conversationSummaryService;
-    private final boolean enabled;
-
-    public HistoryAdvisor(ChatMessageRepository chatMessageRepository, ConversationRepository conversationRepository,
-            HistoryTrimmer historyTrimmer, ConversationSummaryService conversationSummaryService,
-            PromptProperties properties) {
-        this.chatMessageRepository = chatMessageRepository;
-        this.conversationRepository = conversationRepository;
-        this.historyTrimmer = historyTrimmer;
-        this.conversationSummaryService = conversationSummaryService;
-        this.enabled = properties.history().tokenTrim();
-    }
+    private final PromptProperties properties;
 
     @Override
     public int getOrder() {
@@ -56,7 +51,7 @@ public class HistoryAdvisor implements PromptAdvisor {
 
     @Override
     public ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain) {
-        if (!enabled || request == null || request.context() == null) {
+        if (!properties.history().tokenTrim() || request == null || request.context() == null) {
             return request;
         }
         String conversationId = PromptAdvisor.contextString(request, ChatContextKeys.CONVERSATION_ID);
@@ -67,7 +62,7 @@ public class HistoryAdvisor implements PromptAdvisor {
         ModelProfile profile = PromptAdvisor.modelProfile(request);
         String currentMessageId = PromptAdvisor.contextString(request, ChatContextKeys.CURRENT_MESSAGE_ID);
         List<ChatMessage> loaded = loadHistory(conversationId, currentMessageId);
-        int historyBudget = profile != null ? profile.historyBudget() : DEFAULT_HISTORY_BUDGET;
+        int historyBudget = PromptAdvisor.budgetProfile(request).historyBudget();
         TrimmedHistory history = historyTrimmer.trimToBudget(loaded, historyBudget);
         if (!history.dropped().isEmpty()) {
             summarizeDropped(conversationId, history, profile);
@@ -81,7 +76,6 @@ public class HistoryAdvisor implements PromptAdvisor {
         List<Message> instructions = prompt != null && prompt.getInstructions() != null
                 ? prompt.getInstructions()
                 : List.of();
-        // System instructions stay first; summary and history go before the current turn.
         List<Message> messages = new ArrayList<>();
         instructions.stream().filter(HistoryAdvisor::isSystem).forEach(messages::add);
         summary.ifPresent(messages::add);
@@ -92,7 +86,6 @@ public class HistoryAdvisor implements PromptAdvisor {
         return request.mutate().prompt(historyPrompt).build();
     }
 
-    /** Summarising is best-effort: if the job cannot be started, the trimmed history is still sent. */
     private void summarizeDropped(String conversationId, TrimmedHistory history, ModelProfile profile) {
         String modelName = profile != null ? profile.modelName() : null;
         try {
@@ -114,19 +107,19 @@ public class HistoryAdvisor implements PromptAdvisor {
                 currentMessageId);
     }
 
-    private static Message toSummaryMessage(Conversation conversation) {
-        String summaryText = "<summary>\n" + conversation.getSummary().trim() + "\n</summary>";
-        return new SystemMessage(summaryText);
-    }
-
-    /** The summary is best-effort: a lookup failure must not block the chat. */
     private Optional<Message> summaryMessage(String conversationId) {
         try {
             return conversationRepository.findById(conversationId).filter(Conversation::hasSummary)
                     .map(HistoryAdvisor::toSummaryMessage);
-        } catch (Exception e) {
-            log.debug("Could not load summary for conversation '{}': {}", conversationId, e.getMessage());
+        } catch (RuntimeException e) {
+            log.warn("Could not load the summary of conversation '{}'; sending the prompt without it", conversationId,
+                    e);
             return Optional.empty();
         }
+    }
+
+    private static Message toSummaryMessage(Conversation conversation) {
+        String summaryText = "<summary>\n" + conversation.getSummary().trim() + "\n</summary>";
+        return new SystemMessage(summaryText);
     }
 }

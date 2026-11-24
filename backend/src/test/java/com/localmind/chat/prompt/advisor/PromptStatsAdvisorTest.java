@@ -1,8 +1,10 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.advisor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import com.localmind.chat.prompt.token.CharacterTokenCounter;
+import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.llm.model.ModelProfile;
 import com.localmind.support.TestProperties;
 import java.util.List;
@@ -14,6 +16,10 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 
+/**
+ * Unit tests for {@link PromptStatsAdvisor}: prompt token counting at order 500 and the unchanged request when counting
+ * fails.
+ */
 class PromptStatsAdvisorTest {
     private final TokenCounter tokenCounter = new CharacterTokenCounter();
     private final PromptStatsAdvisor advisor = new PromptStatsAdvisor(tokenCounter, TestProperties.promptDefaults());

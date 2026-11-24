@@ -8,18 +8,17 @@ import com.localmind.attachment.repository.AttachmentRepository;
 import com.localmind.chat.config.PromptProperties;
 import com.localmind.chat.dto.ChatEvent;
 import com.localmind.chat.dto.ChatRequest;
-import com.localmind.chat.prompt.AutoRagAdvisor;
-import com.localmind.chat.prompt.CharacterTokenCounter;
-import com.localmind.chat.prompt.HistoryAdvisor;
-import com.localmind.chat.prompt.HistoryTrimmer;
-import com.localmind.chat.prompt.MemoryRetrievalAdvisor;
+import com.localmind.chat.model.ToolCallRecord;
 import com.localmind.chat.prompt.PromptAdvisor;
-import com.localmind.chat.prompt.PromptStatsAdvisor;
-import com.localmind.chat.prompt.PromptStructureAdvisor;
-import com.localmind.chat.prompt.TokenCounter;
-import com.localmind.chat.prompt.ToolNoteRenderer;
-import com.localmind.chat.prompt.ToolSelector;
-import com.localmind.common.exception.ResourceNotFoundException;
+import com.localmind.chat.prompt.advisor.AutoRagAdvisor;
+import com.localmind.chat.prompt.advisor.HistoryAdvisor;
+import com.localmind.chat.prompt.advisor.MemoryRetrievalAdvisor;
+import com.localmind.chat.prompt.advisor.PromptStatsAdvisor;
+import com.localmind.chat.prompt.advisor.PromptStructureAdvisor;
+import com.localmind.chat.prompt.history.HistoryTrimmer;
+import com.localmind.chat.prompt.history.ToolNoteRenderer;
+import com.localmind.chat.prompt.token.CharacterTokenCounter;
+import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.conversation.entity.ChatMessage;
 import com.localmind.conversation.entity.Conversation;
 import com.localmind.conversation.repository.ChatMessageRepository;
@@ -37,6 +36,7 @@ import com.localmind.tools.service.DateTimeTools;
 import com.localmind.tools.service.DocumentSearchTools;
 import com.localmind.tools.service.MathTools;
 import com.localmind.tools.service.UserMemoryTools;
+import com.localmind.tools.service.UserMemoryWriteService;
 import com.localmind.tools.service.WebScraperTools;
 import com.localmind.tools.service.WebSearchTools;
 import java.time.Instant;
@@ -68,6 +68,11 @@ import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Unit tests for {@link ChatOrchestratorService}: token streaming and message persistence, reasoning tags split across
+ * chunks, ownership denial, history and memory injection, tool events and loop limits, and user-facing errors. Uses an
+ * in-memory chat model and vector store, so no Ollama or Qdrant is needed.
+ */
 @ExtendWith(MockitoExtension.class)
 class ChatOrchestratorServiceTest {
 
@@ -161,7 +166,8 @@ class ChatOrchestratorServiceTest {
         WebSearchTools webSearchTools = new WebSearchTools(RestClient.create(),
                 new SearxngProperties("http://localhost:8081"));
         WebScraperTools webScraperTools = new WebScraperTools(new WebScraperProperties(false));
-        UserMemoryTools userMemoryTools = new UserMemoryTools(userMemoryRepository, vectorStore);
+        UserMemoryTools userMemoryTools = new UserMemoryTools(userMemoryRepository, vectorStore,
+                new UserMemoryWriteService(userMemoryRepository, vectorStore));
         DocumentSearchTools documentSearchTools = new DocumentSearchTools(vectorStore);
 
         conversation = Conversation.builder().id(conversationId).userId(userId).title("New Chat").modelName("gemma3:1b")
@@ -191,8 +197,8 @@ class ChatOrchestratorServiceTest {
     @Test
     @DisplayName("streamChat() should stream content tokens and persist user & assistant messages upon completion")
     void streamChatNormalContent() {
-        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(conversation));
 
         ChatResponse chunk1 = new ChatResponse(List.of(new Generation(new AssistantMessage("Hello! "))));
         ChatResponse chunk2 = new ChatResponse(List.of(new Generation(new AssistantMessage("How can I help you?"))));
@@ -205,7 +211,7 @@ class ChatOrchestratorServiceTest {
                     .createdAt(Instant.now()).build();
         });
 
-        ChatRequest request = new ChatRequest(conversationId, "Hi there", null, false, null);
+        ChatRequest request = new ChatRequest(conversationId, "  Hi there \n", null, false, null);
 
         Flux<ChatEvent> eventFlux = chatOrchestratorService.streamChat(request, userId);
 
@@ -226,7 +232,6 @@ class ChatOrchestratorServiceTest {
         assertEquals(ChatMessage.Role.ASSISTANT, savedMessages.get(1).getRole());
         assertEquals("Hello! How can I help you?", savedMessages.get(1).getContent());
         assertNull(savedMessages.get(1).getReasoningContent());
-        // The stale conversation snapshot must never be saved back; only updatedAt is bumped.
         verify(conversationRepository).touch(eq(conversationId), any(Instant.class));
         verify(conversationRepository, never()).save(any());
         assertNotNull(savedMessages.get(1).getTokenCount());
@@ -239,8 +244,8 @@ class ChatOrchestratorServiceTest {
     @Test
     @DisplayName("streamChat() should answer normally when prompt advisors fail to load user data or history")
     void streamChatSurvivesFailingAdvisors() {
-        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(conversation));
         when(userRepository.findById(userId)).thenThrow(new IllegalStateException("database unavailable"));
         when(chatMessageRepository.findByConversationIdAndIdNotOrderByCreatedAtAsc(eq(conversationId), any()))
                 .thenThrow(new IllegalStateException("database unavailable"));
@@ -263,8 +268,8 @@ class ChatOrchestratorServiceTest {
     @Test
     @DisplayName("streamChat() should extract <think>...</think> reasoning tags into REASONING events")
     void streamChatWithReasoningTags() {
-        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(conversation));
 
         ChatResponse chunk1 = new ChatResponse(
                 List.of(new Generation(new AssistantMessage("<think>Analyzing user query</think>"))));
@@ -299,7 +304,7 @@ class ChatOrchestratorServiceTest {
     @Test
     @DisplayName("streamChat() when ownership check fails should propagate AccessDeniedException")
     void streamChatOwnershipFailed() {
-        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(false);
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId)).thenReturn(Optional.empty());
 
         ChatRequest request = new ChatRequest(conversationId, "Hello", null, false, null);
 
@@ -310,8 +315,8 @@ class ChatOrchestratorServiceTest {
     @Test
     @DisplayName("streamChat() with custom model and system prompt should use provided parameters")
     void streamChatWithCustomModelAndSystemPrompt() {
-        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(conversation));
 
         ChatResponse chunk = new ChatResponse(List.of(new Generation(new AssistantMessage("Custom model reply"))));
         chatModel.streamResponses = Flux.just(chunk);
@@ -337,21 +342,21 @@ class ChatOrchestratorServiceTest {
     }
 
     @Test
-    @DisplayName("streamChat() with non-existent conversation should throw ResourceNotFoundException")
+    @DisplayName("streamChat() with a non-existent conversation is denied like another user's (403)")
     void streamChatConversationNotFound() {
-        when(conversationRepository.existsByIdAndUserId("nonexistent", userId)).thenReturn(true);
-        when(conversationRepository.findById("nonexistent")).thenReturn(Optional.empty());
+        when(conversationRepository.findLockedByIdAndUserId("nonexistent", userId)).thenReturn(Optional.empty());
 
         ChatRequest request = new ChatRequest("nonexistent", "Hello", null, false, null);
 
-        assertThrows(ResourceNotFoundException.class, () -> chatOrchestratorService.streamChat(request, userId));
+        assertThrows(AccessDeniedException.class, () -> chatOrchestratorService.streamChat(request, userId));
+        verifyNoInteractions(chatMessageRepository);
     }
 
     @Test
     @DisplayName("streamChat() should include prior conversation history in chat prompt")
     void streamChatWithMultiTurnHistory() {
-        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(conversation));
 
         ChatMessage prevUser = ChatMessage.builder().id("prev-1").conversationId(conversationId)
                 .role(ChatMessage.Role.USER).content("What is the capital of France?")
@@ -360,7 +365,6 @@ class ChatOrchestratorServiceTest {
                 .role(ChatMessage.Role.ASSISTANT).content("Paris is the capital of France.")
                 .createdAt(Instant.now().minusSeconds(30)).build();
 
-        // History includes prior messages.
         when(chatMessageRepository.findByConversationIdAndIdNotOrderByCreatedAtAsc(eq(conversationId), any()))
                 .thenReturn(List.of(prevUser, prevAssistant));
 
@@ -438,7 +442,7 @@ class ChatOrchestratorServiceTest {
     @DisplayName("MonitoredToolCallback should record resultSummary in executedToolCalls")
     void wrapToolRecordsResultSummary() {
         AtomicInteger counter = new AtomicInteger(0);
-        List<Map<String, Object>> executedToolCalls = new ArrayList<>();
+        List<ToolCallRecord> executedToolCalls = new ArrayList<>();
         ToolCallback delegate = mock(ToolCallback.class);
         when(delegate.call(any(), any())).thenReturn("Search returned 3 results: result A, result B, result C");
 
@@ -449,15 +453,14 @@ class ChatOrchestratorServiceTest {
         wrapped.call("test query", null);
 
         assertEquals(1, executedToolCalls.size());
-        assertNotNull(executedToolCalls.get(0).get("resultSummary"));
-        assertTrue(executedToolCalls.get(0).get("resultSummary").toString().contains("Search returned 3 results"));
+        assertTrue(executedToolCalls.getFirst().resultSummary().contains("Search returned 3 results"));
     }
 
     @Test
     @DisplayName("streamChat() should parse split <think> tags across stream chunks")
     void streamChatWithSplitThinkTagsEndToEnd() {
-        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(conversation));
 
         ChatResponse chunk1 = new ChatResponse(List.of(new Generation(new AssistantMessage("<th"))));
         ChatResponse chunk2 = new ChatResponse(List.of(new Generation(new AssistantMessage("ink>Pondering</thin"))));
@@ -485,26 +488,26 @@ class ChatOrchestratorServiceTest {
         ChatMessage assistantMsg = captor.getAllValues().get(1);
         assertEquals("Pondering", assistantMsg.getReasoningContent());
         assertEquals("Done!", assistantMsg.getContent());
+        assertEquals(new CharacterTokenCounter().estimate("Done!"), assistantMsg.getTokenCount());
     }
 
     @Test
     @DisplayName("MonitoredToolCallback should emit TOOL_START and TOOL_END events and break loops after 5 iterations")
     void wrapToolEmitsEventsAndBreaksLoop() {
         AtomicInteger counter = new AtomicInteger(0);
+        List<ToolCallRecord> executedToolCalls = new ArrayList<>();
         Flux<ChatEvent> flux = Flux.create(sink -> {
             ToolCallback mockCallback = FunctionToolCallback
                     .builder("testTool", (Map<String, Object> input) -> "result").description("test tool description")
                     .inputType(Map.class).build();
 
-            ToolCallback wrapped = new MonitoredToolCallback(mockCallback, sink, counter, null);
+            ToolCallback wrapped = new MonitoredToolCallback(mockCallback, sink, counter, executedToolCalls);
 
-            // Execute 5 times (allowed).
             for (int i = 0; i < 5; i++) {
                 String res = wrapped.call("{}");
                 assertTrue(res.contains("result"));
             }
 
-            // 6th execution should trigger loop protection.
             String blocked = wrapped.call("{}");
             assertTrue(blocked.contains("Loop protection triggered"));
 
@@ -512,19 +515,19 @@ class ChatOrchestratorServiceTest {
         });
 
         StepVerifier.create(flux)
-                // 5 iterations * 2 events = 10 events (TOOL_START, TOOL_END).
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.TOOL_START && "testTool".equals(e.tool()))
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.TOOL_END && "testTool".equals(e.tool()))
                 .expectNextCount(8).verifyComplete();
 
         assertEquals(6, counter.get());
+        assertEquals(5, executedToolCalls.size());
     }
 
     @Test
     @DisplayName("streamChat() should inject custom instructions and user memories into system prompt")
     void streamChatWithCustomInstructionsAndMemoriesEnrichment() {
-        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(conversation));
 
         when(userRepository.findById(userId))
                 .thenReturn(Optional.of(com.localmind.user.entity.User.builder().id(userId).email("user@localmind.ai")
@@ -567,8 +570,8 @@ class ChatOrchestratorServiceTest {
     @Test
     @DisplayName("streamChat() with toolsEnabled=true on gemma3:1b should skip tool registration")
     void streamChatSkipsToolsForIncompatibleModel() {
-        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(conversation));
 
         ChatResponse chunk = new ChatResponse(List.of(new Generation(new AssistantMessage("Hello!"))));
         chatModel.streamResponses = Flux.just(chunk);
@@ -580,7 +583,6 @@ class ChatOrchestratorServiceTest {
                     .createdAt(Instant.now()).build();
         });
 
-        // toolsEnabled is explicitly true, but conversation.modelName is "gemma3:1b".
         ChatRequest request = new ChatRequest(conversationId, "Calculate 2+2", null, true, null);
 
         StepVerifier.create(chatOrchestratorService.streamChat(request, userId))
@@ -598,8 +600,8 @@ class ChatOrchestratorServiceTest {
     @Test
     @DisplayName("streamChat() translates Ollama tool unsupported error into a user-friendly message")
     void streamChatTranslatesToolUnsupportedError() {
-        when(conversationRepository.existsByIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(conversation));
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         chatModel.streamResponses = Flux.error(new RuntimeException(
@@ -611,5 +613,30 @@ class ChatOrchestratorServiceTest {
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.ERROR
                         && e.content().contains("does not support tool calling in Ollama"))
                 .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("A failed stream keeps text held back as a possible partial tag in the saved partial reply")
+    void streamChatPartialReplyKeepsHeldBackText() {
+        when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(conversation));
+        when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ChatResponse chunk = new ChatResponse(List.of(new Generation(new AssistantMessage("Hello <th"))));
+        chatModel.streamResponses = Flux.concat(Flux.just(chunk), Flux.error(new RuntimeException("connection reset")));
+
+        ChatRequest request = new ChatRequest(conversationId, "Hi", null, false, null);
+
+        StepVerifier.create(chatOrchestratorService.streamChat(request, userId))
+                .expectNextMatches(e -> e.type() == ChatEvent.EventType.CONTENT && "Hello ".equals(e.content()))
+                .expectNextMatches(e -> e.type() == ChatEvent.EventType.CONTENT && "<th".equals(e.content()))
+                .expectNextMatches(e -> e.type() == ChatEvent.EventType.ERROR).verifyComplete();
+
+        ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
+        verify(chatMessageRepository, times(2)).save(captor.capture());
+        ChatMessage partial = captor.getAllValues().get(1);
+        assertEquals(ChatMessage.Role.ASSISTANT, partial.getRole());
+        assertEquals("Hello <th", partial.getContent());
+        verify(conversationRepository).touch(eq(conversationId), any(Instant.class));
     }
 }

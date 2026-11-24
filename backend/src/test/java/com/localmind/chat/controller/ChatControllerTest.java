@@ -1,5 +1,7 @@
 package com.localmind.chat.controller;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
@@ -8,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.localmind.chat.dto.ChatRequest;
 import com.localmind.conversation.entity.Conversation;
 import com.localmind.conversation.repository.ConversationRepository;
+import com.localmind.support.OfflineAiStack;
 import com.localmind.user.entity.User;
 import com.localmind.user.repository.UserRepository;
 import java.time.Instant;
@@ -15,15 +18,25 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import reactor.core.publisher.Flux;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * MockMvc tests for {@link ChatController}: 401 without a token, 400 for a blank message, 403 for another user's
+ * conversation and the start of the async SSE response. Boots the full context on the test profile (H2) with the
+ * {@link OfflineAiStack} mocks; the mocked {@link ChatModel} answers with an empty stream.
+ */
 @SpringBootTest
+@OfflineAiStack
 @ActiveProfiles("test")
 @AutoConfigureMockMvc
 class ChatControllerTest {
@@ -40,12 +53,18 @@ class ChatControllerTest {
     @Autowired
     private ConversationRepository conversationRepository;
 
+    @Autowired
+    private ChatModel chatModel;
+
     private User userA;
     private User userB;
     private Conversation convA;
 
     @BeforeEach
     void setUp() {
+        when(chatModel.getOptions()).thenReturn(ChatOptions.builder().build());
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.empty());
+
         conversationRepository.deleteAll();
         userRepository.deleteAll();
 

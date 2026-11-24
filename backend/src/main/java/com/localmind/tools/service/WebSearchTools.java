@@ -6,6 +6,7 @@ import com.localmind.tools.config.SearxngProperties;
 import java.net.URI;
 import java.util.List;
 import java.util.Objects;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
@@ -14,9 +15,13 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
-/** Web search through a self-hosted SearXNG instance. */
+/**
+ * LLM tool {@code searchWeb}: lets the model search the web through a self-hosted SearXNG instance and read the top
+ * five results. An unreachable SearXNG is reported to the model as such, not as an empty result.
+ */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class WebSearchTools {
 
     private static final String NAME = "searchWeb";
@@ -26,7 +31,7 @@ public class WebSearchTools {
     private static final String UNAVAILABLE = "Error: Web search is unavailable right now. Answer without web results "
             + "and tell the user that search could not be reached.";
 
-    private final RestClient restClient;
+    private final RestClient shortTimeoutRestClient;
     private final SearxngProperties properties;
 
     public record WebSearchRequest(@JsonProperty(value = "query", required = true) String query) {
@@ -43,12 +48,6 @@ public class WebSearchTools {
     record SearxngItem(String title, String url, String content) {
     }
 
-    public WebSearchTools(RestClient shortTimeoutRestClient, SearxngProperties properties) {
-        this.restClient = shortTimeoutRestClient;
-        this.properties = properties;
-    }
-
-    /** Throws when SearXNG cannot be reached or answers with an error, so callers can tell that from no results. */
     List<SearchResult> searchWeb(String query) {
         if (query == null || query.isBlank()) {
             return List.of();
@@ -56,7 +55,8 @@ public class WebSearchTools {
         String searchUrl = properties.baseUrl() + "/search";
         URI searchUri = UriComponentsBuilder.fromUriString(searchUrl).queryParam("q", query.trim())
                 .queryParam("format", "json").build().toUri();
-        SearxngResponse response = restClient.get().uri(searchUri).accept(MediaType.APPLICATION_JSON).retrieve()
+        SearxngResponse response = shortTimeoutRestClient.get().uri(searchUri).accept(MediaType.APPLICATION_JSON)
+                .retrieve()
                 .body(SearxngResponse.class);
         if (response == null || response.results() == null) {
             return List.of();

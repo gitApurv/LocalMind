@@ -16,7 +16,7 @@ Prompt construction is separated from the streaming orchestrator (`chat.service.
 | 400 | `HistoryAdvisor` | Rolling summary and token-trimmed history, between system message and current turn |
 | 500 | `PromptStatsAdvisor` | Token accounting log (no changes) |
 
-Tool selection (`chat.prompt.ToolSelector`) and model budgets (`llm.service.ModelProfileRegistry`) are applied by the orchestrator around this chain.
+Tool selection (`chat.service.ToolSelector`) and model budgets (`llm.service.ModelProfileRegistry`) are applied by the orchestrator around this chain.
 
 ### Core Design Principles
 
@@ -134,7 +134,7 @@ Before the reactive stream starts (so failures are ordinary HTTP errors):
 
 ### Step 2: Dynamic Tool Selection (`ToolSelector`)
 
-Implemented in `com.localmind.chat.prompt.ToolSelector`:
+Implemented in `com.localmind.chat.service.ToolSelector`:
 
 1. **Capability check:** returns no tools when `toolsEnabled` is `false` (it defaults to `true`) or when `ModelCatalogService.supportsTools(model)` is `false`. That check reads the cached Ollama catalogue (`"tools" ∈ capabilities`), which is loaded at startup and reloaded on demand when it is empty or older than 5 minutes. A name without a tag matches only its `:latest` tag; a model missing from the catalogue falls back to its `ModelProfile` (no tools for unknown models). Without tools, no schema is sent, so models such as `gemma3:1b` do not fail with HTTP 400.
 2. **Tools offered:**
@@ -151,7 +151,7 @@ Implemented in `com.localmind.chat.prompt.ToolSelector`:
      Loop protection triggered: Maximum tool calls (5) reached. Please provide the final response to the user now.
      ```
 
-   - **Audit record:** each call adds `tool` (name), `input` (raw argument JSON), `timestamp` (ISO-8601) and `resultSummary` (the result, cut to 120 characters plus `...` when longer; `empty` for no result; `failed` when the tool threw). Calls refused by the loop guard are neither recorded nor announced with `TOOL_START`/`TOOL_END`. The list is stored as `messages.tool_calls`.
+   - **Audit record:** each call adds a `chat.model.ToolCallRecord` with `tool` (name), `input` (raw argument JSON), `timestamp` (ISO-8601) and `resultSummary` (the result, cut to 120 characters plus `...` when longer; `empty` for no result; `failed` when the tool threw). Calls refused by the loop guard are neither recorded nor announced with `TOOL_START`/`TOOL_END`. The list is stored as `messages.tool_calls`.
    - **Events:** emits `TOOL_START` before and `TOOL_END` after the call.
    - **Failures:** an exception is logged and the model receives `Error executing tool (<name>). Continue without its result.`
 4. **Tool context:** `userId` and `conversationId` are passed as the Spring AI `ToolContext`, so memory and document tools cannot be pointed at another tenant by the model.
@@ -160,7 +160,7 @@ Implemented in `com.localmind.chat.prompt.ToolSelector`:
 
 ### Step 3: Order 100 — `PromptStructureAdvisor` (System Prompt Foundation)
 
-Implemented in `com.localmind.chat.prompt.PromptStructureAdvisor`. Builds one system message from:
+Implemented in `com.localmind.chat.prompt.advisor.PromptStructureAdvisor`. Builds one system message from:
 
 1. **Base rules:**
 
@@ -192,7 +192,7 @@ The system message is placed first, followed by the existing prompt messages.
 
 ### Step 4: Order 200 — `MemoryRetrievalAdvisor` (Semantic User Memories)
 
-Implemented in `com.localmind.chat.prompt.MemoryRetrievalAdvisor`:
+Implemented in `com.localmind.chat.prompt.advisor.MemoryRetrievalAdvisor`:
 
 1. **Switch:** `localmind.prompt.memory.semantic` (`PROMPT_MEMORY_SEMANTIC`, default `true`).
 2. **Vector query:**
@@ -217,7 +217,7 @@ Implemented in `com.localmind.chat.prompt.MemoryRetrievalAdvisor`:
 
 ### Step 5: Order 300 — `AutoRagAdvisor` (Automatic Document Retrieval)
 
-Implemented in `com.localmind.chat.prompt.AutoRagAdvisor`:
+Implemented in `com.localmind.chat.prompt.advisor.AutoRagAdvisor`:
 
 1. **Switch:** `localmind.prompt.rag.auto` (`PROMPT_RAG_AUTO`, default `true`).
 2. **Fast skip:** if `attachmentRepository.existsByConversationIdAndStatus(conversationId, READY)` is `false`, the request is returned unchanged.
@@ -251,7 +251,7 @@ The model can also search documents itself with the `searchUploadedDocs` tool (S
 
 ### Step 6: Order 400 — `HistoryAdvisor` & `HistoryTrimmer` (Conversation History)
 
-Implemented in `com.localmind.chat.prompt.HistoryAdvisor`:
+Implemented in `com.localmind.chat.prompt.advisor.HistoryAdvisor`:
 
 1. **Switch:** `localmind.prompt.history.token-trim` (`PROMPT_HISTORY_TOKEN_TRIM`, default `true`). When `false` the advisor does nothing, so the prompt contains **no** history or summary.
 2. **Load history without the current message:**
@@ -289,20 +289,20 @@ Implemented in `com.localmind.chat.prompt.HistoryAdvisor`:
 
 ### Step 7: Order 500 — `PromptStatsAdvisor` (Token Accounting & Observability)
 
-Implemented in `com.localmind.chat.prompt.PromptStatsAdvisor`:
+Implemented in `com.localmind.chat.prompt.advisor.PromptStatsAdvisor`:
 
 1. **Switch:** `localmind.prompt.stats.enabled` (`PROMPT_STATS_ENABLED`, default `true`).
 2. **Token estimate:** `CharacterTokenCounter.estimate(text)` is `0` for empty text, otherwise `Math.max(1, length / 4)`. Messages are grouped into system, user, assistant (history) and other.
 3. **Log:**
 
    ```text
-   INFO  c.l.chat.prompt.PromptStatsAdvisor : Prompt assembled: total=520 tokens / ctx=8192 (system=142, history/assistant=230, user=148, other=0)
+   INFO  c.l.chat.prompt.advisor.PromptStatsAdvisor : Prompt assembled: total=520 tokens / ctx=8192 (system=142, history/assistant=230, user=148, other=0)
    ```
 
 4. **Overflow warning** when the total exceeds `numCtx`:
 
    ```text
-   WARN  c.l.chat.prompt.PromptStatsAdvisor : Prompt token budget overflow! Total 8500 exceeds numCtx 8192
+   WARN  c.l.chat.prompt.advisor.PromptStatsAdvisor : Prompt token budget overflow! Total 8500 exceeds numCtx 8192
    ```
 
 The advisor never changes the request.
@@ -314,11 +314,11 @@ The advisor never changes the request.
 1. **Streaming:** `promptSpec.stream().chatResponse().subscribe(onChunk, onError, onComplete)` inside `Flux.create`, one `ChatTurn` per request.
 2. **`StreamingTagParser`:** splits the text into `REASONING` (inside `<think>…</think>`) and `CONTENT` events, buffering tag fragments cut across chunks, and accumulates both for persistence.
 3. **On completion:**
-   - Saves the assistant message: `content`, `reasoningContent` (null if blank), `toolCalls` (the audit list as JSON, null if no tools ran) and `tokenCount` (`estimateTokens(content + reasoning)`).
+   - Saves the assistant message: `content`, `reasoningContent` (null if blank), `toolCalls` (the audit list as JSON, null if no tools ran) and `tokenCount` (`estimateTokens(content)`; reasoning is never replayed, so it is not counted).
    - Bumps `conversations.updated_at` with `ConversationRepository.touch(...)`, a targeted update that never overwrites a concurrent rename or pin.
    - Emits `DONE` with the saved message ID.
    - Calls `AutoTitleService.generateTitleAsync(...)`. It runs after every completed turn but only acts while the title is still the placeholder `New Chat`: the model proposes a 3–5 word title (think blocks, quotes and `Title:` prefixes stripped, max 50 characters) and `replacePlaceholderTitle` stores it only if the user has not renamed the conversation meanwhile.
-4. **On model error:** the partial answer is saved, but only if some content or reasoning was generated (a turn that only ran tools is not saved), and an `ERROR` event is sent. `updated_at` is not touched and no title is generated. If Ollama's error contains "does not support tools", the message is *"Model '\<model\>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model."*; otherwise a generic message asks the user to check Ollama. Details are only logged.
+4. **On model error:** the partial answer is saved, but only if some content or reasoning was generated (a turn that only ran tools is not saved), and an `ERROR` event is sent. Before saving, the parser is flushed so held-back text is kept; a saved partial reply bumps `updated_at`. No title is generated. If Ollama's error contains "does not support tools", the message is *"Model '\<model\>' does not support tool calling in Ollama. Please disable Tools or select a tool-compatible model."*; otherwise a generic message asks the user to check Ollama. Details are only logged.
 5. **On client disconnect:** the upstream Ollama subscription is disposed and the partial answer is saved, with the same rule: nothing is saved when no content or reasoning was generated.
 
 ---

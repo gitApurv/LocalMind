@@ -1,14 +1,17 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.advisor;
 
 import com.localmind.attachment.entity.Attachment;
 import com.localmind.attachment.repository.AttachmentRepository;
 import com.localmind.chat.config.PromptProperties;
+import com.localmind.chat.prompt.PromptAdvisor;
+import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.common.ai.ChatContextKeys;
 import com.localmind.common.ai.VectorFilters;
 import com.localmind.common.ai.VectorMetadata;
-import com.localmind.llm.model.ModelProfile;
+import com.localmind.common.ai.VectorSearchDefaults;
 import java.util.List;
 import java.util.Map;
+import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -20,29 +23,20 @@ import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.stereotype.Component;
 
 /**
- * Step 3: prepends the most relevant document excerpts of the conversation's attachments to the user message, within
- * the model's RAG token budget.
+ * Prompt step 3 (order 300): prepends the most relevant document excerpts of the conversation's attachments to the user
+ * message, within the model's RAG token budget. Runs only when the conversation has a {@code READY} attachment;
+ * switched off by {@code localmind.prompt.rag.auto}.
  */
 @Component
+@RequiredArgsConstructor
 public class AutoRagAdvisor implements PromptAdvisor {
 
     private static final int ORDER = 300;
-    private static final int TOP_K = 4;
-    private static final double SIMILARITY_THRESHOLD = 0.4;
-    private static final int DEFAULT_RAG_BUDGET = 2000;
 
     private final VectorStore vectorStore;
     private final AttachmentRepository attachmentRepository;
     private final TokenCounter tokenCounter;
-    private final boolean enabled;
-
-    public AutoRagAdvisor(VectorStore vectorStore, AttachmentRepository attachmentRepository, TokenCounter tokenCounter,
-            PromptProperties properties) {
-        this.vectorStore = vectorStore;
-        this.attachmentRepository = attachmentRepository;
-        this.tokenCounter = tokenCounter;
-        this.enabled = properties.rag().auto();
-    }
+    private final PromptProperties properties;
 
     @Override
     public int getOrder() {
@@ -51,7 +45,7 @@ public class AutoRagAdvisor implements PromptAdvisor {
 
     @Override
     public ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain) {
-        if (!enabled || request == null || request.context() == null) {
+        if (!properties.rag().auto() || request == null || request.context() == null) {
             return request;
         }
         String conversationId = PromptAdvisor.contextString(request, ChatContextKeys.CONVERSATION_ID);
@@ -66,7 +60,7 @@ public class AutoRagAdvisor implements PromptAdvisor {
         }
 
         List<Document> documents = search(userId, conversationId, userText);
-        int budget = ragBudget(request);
+        int budget = PromptAdvisor.budgetProfile(request).ragBudget();
         String references = renderReferences(documents, budget);
         if (references.isEmpty()) {
             return request;
@@ -78,17 +72,13 @@ public class AutoRagAdvisor implements PromptAdvisor {
 
     private List<Document> search(String userId, String conversationId, String query) {
         Filter.Expression filter = VectorFilters.documentChunks(userId, conversationId);
-        SearchRequest searchRequest = SearchRequest.builder().query(query.trim()).topK(TOP_K)
-                .similarityThreshold(SIMILARITY_THRESHOLD).filterExpression(filter).build();
+        SearchRequest searchRequest = SearchRequest.builder().query(query.trim())
+                .topK(VectorSearchDefaults.DOCUMENT_TOP_K)
+                .similarityThreshold(VectorSearchDefaults.DOCUMENT_SIMILARITY_THRESHOLD).filterExpression(filter)
+                .build();
         return vectorStore.similaritySearch(searchRequest);
     }
 
-    private static int ragBudget(ChatClientRequest request) {
-        ModelProfile profile = PromptAdvisor.modelProfile(request);
-        return profile != null ? profile.ragBudget() : DEFAULT_RAG_BUDGET;
-    }
-
-    /** Always keeps the best excerpt, then adds more while they fit the budget. */
     private String renderReferences(List<Document> documents, int budget) {
         if (documents == null) {
             return "";

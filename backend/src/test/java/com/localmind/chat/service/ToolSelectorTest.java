@@ -1,4 +1,4 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.service;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -22,6 +22,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 
+/**
+ * Unit tests for {@link ToolSelector}: no tools for unsupported models or when not requested, document search only with
+ * ready attachments, and the web scraper only when the message contains a URL.
+ */
 class ToolSelectorTest {
     private final ModelProfileRegistry registry = new ModelProfileRegistry();
     private final AttachmentRepository attachmentRepository = mock(AttachmentRepository.class);
@@ -73,7 +77,7 @@ class ToolSelectorTest {
         }
     };
 
-    private final UserMemoryTools userMemoryTools = new UserMemoryTools(null, null) {
+    private final UserMemoryTools userMemoryTools = new UserMemoryTools(null, null, null) {
         @Override
         public ToolCallback saveToolCallback() {
             return memoryCb;

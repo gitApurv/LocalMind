@@ -10,19 +10,23 @@ import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
 import org.springframework.ai.chat.messages.Message;
 
 /**
- * A step of LocalMind's prompt-assembly pipeline. All implementations are picked up by the chat orchestrator and run in
- * {@link #getOrder()} order. Advisors only transform the request; on failure they return it unchanged.
+ * One step of the prompt-assembly pipeline: adds one part of LocalMind's prompt to the chat request. All
+ * implementations are picked up by the chat orchestrator and run in {@link #getOrder()} order. Advisors only transform
+ * the request; on failure they return it unchanged.
+ * <p>
+ * The steps live in {@code advisor/}, history trimming in {@code history/}, token estimation in {@code token/}:
+ * <ol>
+ * <li>100 {@link com.localmind.chat.prompt.advisor.PromptStructureAdvisor}: system message</li>
+ * <li>200 {@link com.localmind.chat.prompt.advisor.MemoryRetrievalAdvisor}: relevant memories</li>
+ * <li>300 {@link com.localmind.chat.prompt.advisor.AutoRagAdvisor}: document excerpts</li>
+ * <li>400 {@link com.localmind.chat.prompt.advisor.HistoryAdvisor}: summary and trimmed history</li>
+ * <li>500 {@link com.localmind.chat.prompt.advisor.PromptStatsAdvisor}: token log</li>
+ * </ol>
  */
 public interface PromptAdvisor extends BaseAdvisor {
 
-    /** This advisor's contribution to the prompt. May throw: {@link #before} turns any failure into a no-op. */
     ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain);
 
-    /**
-     * Runs {@link #apply} and never throws into the LLM pipeline. Spring AI runs advisors inside the response stream,
-     * so an exception here would end the turn with a misleading "model stopped responding" error; a missing prompt part
-     * (memories, excerpts, history) is the better outcome.
-     */
     @Override
     default ChatClientRequest before(ChatClientRequest request, AdvisorChain chain) {
         try {
@@ -43,6 +47,11 @@ public interface PromptAdvisor extends BaseAdvisor {
         return ChatContextKeys.getString(request.context(), key);
     }
 
+    static ModelProfile budgetProfile(ChatClientRequest request) {
+        ModelProfile profile = modelProfile(request);
+        return profile != null ? profile : ModelProfile.generic(null, false);
+    }
+
     static ModelProfile modelProfile(ChatClientRequest request) {
         return request.context() != null
                 && request.context().get(ChatContextKeys.MODEL_PROFILE) instanceof ModelProfile profile
@@ -50,7 +59,6 @@ public interface PromptAdvisor extends BaseAdvisor {
                         : null;
     }
 
-    /** Text of the current user message, or {@code null} when absent or blank. */
     static String userText(ChatClientRequest request) {
         Message userMessage = request.prompt() != null ? request.prompt().getUserMessage() : null;
         if (userMessage == null || userMessage.getText() == null || userMessage.getText().isBlank()) {

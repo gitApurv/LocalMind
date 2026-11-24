@@ -1,10 +1,12 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.advisor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import com.localmind.attachment.entity.Attachment;
 import com.localmind.attachment.repository.AttachmentRepository;
+import com.localmind.chat.prompt.token.CharacterTokenCounter;
+import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.support.TestProperties;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +19,10 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 
+/**
+ * Unit tests for {@link AutoRagAdvisor}: retrieval skipped without ready attachments, reference excerpts injected into
+ * the user message, and the unchanged request when the attachment lookup fails.
+ */
 class AutoRagAdvisorTest {
 
     static class TestVectorStore implements VectorStore {

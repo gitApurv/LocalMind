@@ -2,11 +2,10 @@ package com.localmind.chat.service;
 
 import com.localmind.chat.dto.ChatEvent;
 import com.localmind.chat.dto.ChatRequest;
+import com.localmind.chat.model.ToolCallRecord;
 import com.localmind.chat.prompt.PromptAdvisor;
-import com.localmind.chat.prompt.TokenCounter;
-import com.localmind.chat.prompt.ToolSelector;
+import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.common.ai.ChatContextKeys;
-import com.localmind.common.exception.ResourceNotFoundException;
 import com.localmind.conversation.entity.ChatMessage;
 import com.localmind.conversation.entity.Conversation;
 import com.localmind.conversation.repository.ChatMessageRepository;
@@ -32,6 +31,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.ollama.api.OllamaChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
@@ -59,12 +59,9 @@ public class ChatOrchestratorService {
     private final TokenCounter tokenCounter;
     private final ObjectMapper objectMapper;
 
+    @Transactional
     public Flux<ChatEvent> streamChat(ChatRequest request, String userId) {
-        // Ownership is verified before the reactive stream starts so errors map to HTTP
-        // statuses.
-        ownershipGuard.validateConversationOwnership(request.conversationId(), userId);
-        Conversation conversation = conversationRepository.findById(request.conversationId()).orElseThrow(
-                () -> new ResourceNotFoundException("Conversation not found: " + request.conversationId()));
+        Conversation conversation = ownershipGuard.lockOwnedConversation(request.conversationId(), userId);
 
         String model = llmProperties.resolveModel(request.model(), conversation.getModelName());
         ModelProfile profile = modelProfileRegistry.getProfile(model);
@@ -73,7 +70,6 @@ public class ChatOrchestratorService {
         return Flux.create(turn::start);
     }
 
-    /** Saved before streaming so the prompt is never lost. */
     private ChatMessage persistUserMessage(ChatRequest request) {
         String content = request.message().trim();
         int tokenCount = estimateTokens(content);
@@ -86,11 +82,9 @@ public class ChatOrchestratorService {
         return Math.max(1, tokenCounter.estimate(text));
     }
 
-    /** State of a single streaming chat turn. */
     private final class ChatTurn {
 
         private static final String TOOLS_UNSUPPORTED_MARKER = "does not support tools";
-        // Details are logged; clients only get these messages so no internal error text leaks.
         private static final String START_FAILED_MESSAGE = "Failed to start the response. Please try again.";
         private static final String STREAM_FAILED_MESSAGE = "The model stopped responding. Check that Ollama is "
                 + "running and the model is installed, then try again.";
@@ -102,8 +96,9 @@ public class ChatOrchestratorService {
         private final String model;
         private final ModelProfile profile;
         private final ChatMessage userMessage;
+        private final String userText;
         private final StreamingTagParser parser = new StreamingTagParser();
-        private final List<Map<String, Object>> executedToolCalls = Collections.synchronizedList(new ArrayList<>());
+        private final List<ToolCallRecord> executedToolCalls = Collections.synchronizedList(new ArrayList<>());
         private final AtomicInteger toolCallCounter = new AtomicInteger();
         private FluxSink<ChatEvent> sink;
 
@@ -115,6 +110,7 @@ public class ChatOrchestratorService {
             this.model = model;
             this.profile = profile;
             this.userMessage = userMessage;
+            this.userText = request.message().trim();
         }
 
         void start(FluxSink<ChatEvent> sink) {
@@ -122,7 +118,6 @@ public class ChatOrchestratorService {
             try {
                 Disposable upstream = buildPrompt().stream().chatResponse().subscribe(this::onChunk, this::onError,
                         this::onComplete);
-                // Client disconnected: cancel the Ollama stream and keep what was generated.
                 sink.onDispose(() -> {
                     if (!upstream.isDisposed()) {
                         upstream.dispose();
@@ -140,7 +135,6 @@ public class ChatOrchestratorService {
             OllamaChatOptions.Builder options = OllamaChatOptions.builder().model(model).numCtx(profile.numCtx())
                     .numPredict(profile.outputReserve());
             List<Advisor> advisors = new ArrayList<>(promptAdvisors);
-            String userText = request.message().trim();
             ChatClient.ChatClientRequestSpec spec = ChatClient.builder(chatModel).build().prompt().options(options)
                     .advisors(advisors).advisors(advisor -> advisorParams().forEach(advisor::param));
             registerTools(spec);
@@ -162,7 +156,7 @@ public class ChatOrchestratorService {
         }
 
         private void registerTools(ChatClient.ChatClientRequestSpec spec) {
-            List<ToolCallback> tools = toolSelector.selectTools(model, request.message(), request.conversationId(),
+            List<ToolCallback> tools = toolSelector.selectTools(model, userText, request.conversationId(),
                     request.isToolsEnabled());
             if (tools.isEmpty()) {
                 if (request.isToolsEnabled()) {
@@ -201,12 +195,10 @@ public class ChatOrchestratorService {
                 parser.flush(sink);
                 ChatMessage reply = assistantMessage();
                 ChatMessage saved = chatMessageRepository.save(reply);
-                // Only bump updatedAt: saving the entity loaded at stream start would undo concurrent edits.
-                Instant now = Instant.now();
-                conversationRepository.touch(conversation.getId(), now);
+                touchConversation();
                 ChatEvent doneEvent = ChatEvent.done(saved.getId());
                 sink.next(doneEvent);
-                autoTitleService.generateTitleAsync(request.conversationId(), request.message(), model);
+                autoTitleService.generateTitleAsync(request.conversationId(), userText, model);
             } catch (Exception e) {
                 log.error("Failed to persist message history for conversation '{}': {}", request.conversationId(),
                         e.getMessage(), e);
@@ -217,15 +209,21 @@ public class ChatOrchestratorService {
         }
 
         private void persistPartialAssistantMessage() {
+            parser.flush(sink);
             if (parser.getAccumulatedContent().isBlank() && parser.getAccumulatedReasoning().isBlank()) {
                 return;
             }
             try {
                 ChatMessage partial = assistantMessage();
                 chatMessageRepository.save(partial);
+                touchConversation();
             } catch (Exception e) {
                 log.warn("Failed to persist partial assistant message: {}", e.getMessage());
             }
+        }
+
+        private void touchConversation() {
+            conversationRepository.touch(conversation.getId(), Instant.now());
         }
 
         private ChatMessage assistantMessage() {
@@ -233,14 +231,14 @@ public class ChatOrchestratorService {
             String reasoning = parser.getAccumulatedReasoning();
             String reasoningContent = reasoning.isBlank() ? null : reasoning;
             String toolCalls = serializeToolCalls();
-            int tokenCount = estimateTokens(content + reasoning);
+            int tokenCount = estimateTokens(content);
             return ChatMessage.builder().conversationId(request.conversationId()).role(ChatMessage.Role.ASSISTANT)
                     .content(content).reasoningContent(reasoningContent).toolCalls(toolCalls).tokenCount(tokenCount)
                     .build();
         }
 
         private String serializeToolCalls() {
-            List<Map<String, Object>> snapshot;
+            List<ToolCallRecord> snapshot;
             synchronized (executedToolCalls) {
                 if (executedToolCalls.isEmpty()) {
                     return null;
@@ -264,7 +262,6 @@ public class ChatOrchestratorService {
             return STREAM_FAILED_MESSAGE;
         }
 
-        /** Ollama's error text can be buried in causes or suppressed exceptions. */
         private static String collectMessages(Throwable error) {
             StringBuilder messages = new StringBuilder();
             for (Throwable current = error; current != null; current = current.getCause()) {

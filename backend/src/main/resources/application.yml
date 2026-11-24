@@ -80,6 +80,6 @@ localmind:
       enabled: ${PROMPT_STATS_ENABLED:true}
   tools:
     searxng:
-      base-url: ${SEARXNG_BASE_URL:http://127.0.0.1:8081}
+      base-url: ${SEARXNG_BASE_URL:http://127.0.0.1:${SEARXNG_PORT:8081}}
     scraper:
       allow-private-subnets: ${SCRAPER_ALLOW_PRIVATE_SUBNETS:false}

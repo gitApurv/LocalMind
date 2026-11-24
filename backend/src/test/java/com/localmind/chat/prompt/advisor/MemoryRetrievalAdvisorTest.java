@@ -1,8 +1,10 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.advisor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import com.localmind.chat.prompt.token.CharacterTokenCounter;
+import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.memory.repository.UserMemoryRepository;
 import com.localmind.support.TestProperties;
 import java.util.List;
@@ -17,6 +19,10 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 
+/**
+ * Unit tests for {@link MemoryRetrievalAdvisor}: retrieved memories appended to the system message and the unchanged
+ * request when vector search fails.
+ */
 class MemoryRetrievalAdvisorTest {
     static class TestVectorStore implements VectorStore {
         List<Document> simResults = List.of();

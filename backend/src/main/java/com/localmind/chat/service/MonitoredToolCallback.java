@@ -1,10 +1,9 @@
 package com.localmind.chat.service;
 
 import com.localmind.chat.dto.ChatEvent;
+import com.localmind.chat.model.ToolCallRecord;
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
@@ -24,22 +23,15 @@ class MonitoredToolCallback implements ToolCallback {
     private static final String LOOP_PROTECTION_MESSAGE = "Loop protection triggered: Maximum tool calls ("
             + MAX_TOOL_ITERATIONS + ") reached. Please provide the final response to the user now.";
     private static final int RESULT_SUMMARY_CHARS = 120;
-    /** Audit summary of a call that threw, so every recorded call has a result. */
     static final String FAILED_SUMMARY = "failed";
 
     private final ToolCallback delegate;
     private final FluxSink<ChatEvent> sink;
     private final AtomicInteger callCounter;
-    private final List<Map<String, Object>> executedToolCalls;
+    private final List<ToolCallRecord> executedToolCalls;
 
-    /**
-     * @param callCounter
-     *            shared by all tools of one chat turn
-     * @param executedToolCalls
-     *            audit log persisted with the assistant message, or {@code null} to skip recording
-     */
     MonitoredToolCallback(ToolCallback delegate, FluxSink<ChatEvent> sink, AtomicInteger callCounter,
-            List<Map<String, Object>> executedToolCalls) {
+            List<ToolCallRecord> executedToolCalls) {
         this.delegate = delegate;
         this.sink = sink;
         this.callCounter = callCounter;
@@ -70,41 +62,24 @@ class MonitoredToolCallback implements ToolCallback {
             return LOOP_PROTECTION_MESSAGE;
         }
 
-        Map<String, Object> record = recordCall(toolName, toolInput);
-        ChatEvent startEvent = ChatEvent.toolStart(toolName);
-        sink.next(startEvent);
+        Instant startedAt = Instant.now();
+        sink.next(ChatEvent.toolStart(toolName));
+        String resultSummary = FAILED_SUMMARY;
         try {
             String result = delegate.call(toolInput, toolContext);
-            if (record != null) {
-                record.put("resultSummary", summarize(result));
-            }
+            resultSummary = summarize(result);
             return result;
         } catch (Exception e) {
             log.warn("Tool invocation failed for '{}': {}", toolName, e.getMessage(), e);
-            if (record != null) {
-                record.put("resultSummary", FAILED_SUMMARY);
-            }
             return "Error executing tool (" + toolName + "). Continue without its result.";
         } finally {
-            ChatEvent endEvent = ChatEvent.toolEnd(toolName);
-            sink.next(endEvent);
+            executedToolCalls.add(new ToolCallRecord(toolName, toolInput, startedAt, resultSummary));
+            sink.next(ChatEvent.toolEnd(toolName));
         }
     }
 
     private String toolName() {
         return delegate.getToolDefinition() != null ? delegate.getToolDefinition().name() : "unknown";
-    }
-
-    private Map<String, Object> recordCall(String toolName, String toolInput) {
-        if (executedToolCalls == null) {
-            return null;
-        }
-        Map<String, Object> record = new LinkedHashMap<>();
-        record.put("tool", toolName);
-        record.put("input", toolInput);
-        record.put("timestamp", Instant.now().toString());
-        executedToolCalls.add(record);
-        return record;
     }
 
     private static String summarize(String result) {

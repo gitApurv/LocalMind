@@ -35,6 +35,11 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Live tests (tag {@code live}) for the full chat flow: register, login, create a conversation, stream a chat turn with
+ * a real model and verify persistence, then history retrieval and cross-user isolation. Needs the real stack (MySQL,
+ * Qdrant, Ollama) and {@code LOCALMIND_LIVE_TESTS=true}.
+ */
 @Tag("live")
 @EnabledIfEnvironmentVariable(named = "LOCALMIND_LIVE_TESTS", matches = "true")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -93,7 +98,6 @@ class EndToEndChatIntegrationTest {
         String testPassword = "Password123!";
         String testFullName = "LocalMind E2E Auditor";
 
-        // Step 1: User Registration (POST /api/auth/register).
         RegisterRequest registerRequest = new RegisterRequest(testEmail, testPassword, testFullName);
         HttpRequest regHttpReq = HttpRequest.newBuilder().uri(URI.create(baseUrl + "/api/auth/register"))
                 .header("Content-Type", "application/json").timeout(REQUEST_TIMEOUT)
@@ -112,9 +116,8 @@ class EndToEndChatIntegrationTest {
         assertThat(persistedUser).isPresent();
         assertThat(persistedUser.get().getId()).isEqualTo(registeredUserId);
         assertThat(persistedUser.get().getFullName()).isEqualTo(testFullName);
-        assertThat(persistedUser.get().getPasswordHash()).isNotBlank().isNotEqualTo(testPassword); // BCrypt hashed
+        assertThat(persistedUser.get().getPasswordHash()).isNotBlank().isNotEqualTo(testPassword);
 
-        // Step 2: User Login (POST /api/auth/login).
         LoginRequest loginRequest = new LoginRequest(testEmail, testPassword);
         HttpRequest loginHttpReq = HttpRequest.newBuilder().uri(URI.create(baseUrl + "/api/auth/login"))
                 .header("Content-Type", "application/json").timeout(REQUEST_TIMEOUT)
@@ -136,7 +139,6 @@ class EndToEndChatIntegrationTest {
         assertThat(tokens).isNotEmpty();
         assertThat(tokens.stream().anyMatch(t -> t.getUserId().equals(registeredUserId) && !t.isRevoked())).isTrue();
 
-        // Step 3: Create Conversation (POST /api/conversations).
         CreateConversationRequest convRequest = new CreateConversationRequest("E2E Verification Thread", "gemma3:1b");
         HttpRequest convHttpReq = HttpRequest.newBuilder().uri(URI.create(baseUrl + "/api/conversations"))
                 .header("Content-Type", "application/json").header("Authorization", "Bearer " + accessToken)
@@ -158,7 +160,6 @@ class EndToEndChatIntegrationTest {
         assertThat(persistedConv.get().getModelName()).isEqualTo("gemma3:1b");
         assertThat(persistedConv.get().isPinned()).isFalse();
 
-        // Step 4: Stream Chat with gemma3:1b (POST /api/chat/stream).
         String testPrompt = "Please reply with exactly the phrase: E2E_VERIFIED_SUCCESS";
         ChatRequest chatRequest = new ChatRequest(conversationId, testPrompt, "gemma3:1b", false,
                 "You are an automated verification agent. Output only what is requested.");
@@ -180,7 +181,6 @@ class EndToEndChatIntegrationTest {
         assertThat(sseBody.contains("\"type\":\"CONTENT\"") || sseBody.contains("\"type\":\"REASONING\""))
                 .as("SSE stream must contain CONTENT or REASONING tokens").isTrue();
 
-        // Step 5: Verify Messages & Conversation Timestamps in MySQL.
         List<ChatMessage> persistedMessages = chatMessageRepository
                 .findByConversationIdOrderByCreatedAtAsc(conversationId);
         assertThat(persistedMessages).hasSizeGreaterThanOrEqualTo(2);
@@ -239,7 +239,6 @@ class EndToEndChatIntegrationTest {
         chatMessageRepository.save(ChatMessage.builder().conversationId(convId).role(ChatMessage.Role.USER)
                 .content("Confidential Plan").build());
 
-        // 1. User 1 successfully retrieves message history.
         HttpResponse<String> user1HistoryRes = httpClient.send(
                 HttpRequest.newBuilder().uri(URI.create(baseUrl + "/api/conversations/" + convId + "/messages"))
                         .header("Authorization", "Bearer " + user1Token).timeout(REQUEST_TIMEOUT).GET().build(),
@@ -250,7 +249,6 @@ class EndToEndChatIntegrationTest {
         assertThat(messagesArray.size()).isEqualTo(1);
         assertThat(messagesArray.get(0).get("content").asString()).isEqualTo("Confidential Plan");
 
-        // Register User 2 (Attacker / Different Tenant).
         String user2Email = "user2." + UUID.randomUUID() + "@localmind.ai";
         httpClient.send(HttpRequest.newBuilder().uri(URI.create(baseUrl + "/api/auth/register"))
                 .header("Content-Type", "application/json").timeout(REQUEST_TIMEOUT)
@@ -265,7 +263,6 @@ class EndToEndChatIntegrationTest {
                         .build(),
                 HttpResponse.BodyHandlers.ofString()).body()).get("accessToken").asString();
 
-        // 2. User 2's conversation list does NOT leak User 1's conversation.
         HttpResponse<String> user2ListRes = httpClient.send(
                 HttpRequest.newBuilder().uri(URI.create(baseUrl + "/api/conversations"))
                         .header("Authorization", "Bearer " + user2Token).timeout(REQUEST_TIMEOUT).GET().build(),
@@ -273,20 +270,17 @@ class EndToEndChatIntegrationTest {
         assertThat(user2ListRes.statusCode()).isEqualTo(200);
         assertThat(user2ListRes.body()).doesNotContain(convId);
 
-        // 3. Unauthenticated request to User 1's conversation should be rejected (401).
         HttpResponse<String> unauthRes = httpClient
                 .send(HttpRequest.newBuilder().uri(URI.create(baseUrl + "/api/conversations/" + convId + "/messages"))
                         .timeout(REQUEST_TIMEOUT).GET().build(), HttpResponse.BodyHandlers.ofString());
         assertThat(unauthRes.statusCode()).isEqualTo(401);
 
-        // 4. User 2 reading User 1's messages is forbidden (403).
         HttpResponse<String> crossTenantRes = httpClient.send(
                 HttpRequest.newBuilder().uri(URI.create(baseUrl + "/api/conversations/" + convId + "/messages"))
                         .header("Authorization", "Bearer " + user2Token).timeout(REQUEST_TIMEOUT).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
         assertThat(crossTenantRes.statusCode()).isEqualTo(403);
 
-        // 5. User 2 streaming into User 1's conversation is forbidden (403).
         ChatRequest maliciousChat = new ChatRequest(convId, "Unauthorized prompt", "gemma3:1b", false, null);
         HttpResponse<String> maliciousChatRes = httpClient.send(HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/api/chat/stream")).header("Content-Type", "application/json")

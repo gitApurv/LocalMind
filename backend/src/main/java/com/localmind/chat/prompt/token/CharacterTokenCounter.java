@@ -1,7 +1,11 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.token;
 
 import org.springframework.stereotype.Component;
 
+/**
+ * Estimates tokens as one per four characters (at least one for non-empty text), a model-independent approximation that
+ * is good enough for prompt budgets.
+ */
 @Component
 public class CharacterTokenCounter implements TokenCounter {
 

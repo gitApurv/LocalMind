@@ -1,12 +1,18 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.history;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.localmind.chat.prompt.token.CharacterTokenCounter;
+import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.conversation.entity.ChatMessage;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Unit tests for {@link HistoryTrimmer}: trimming to budget in user/assistant pairs, skipping unanswered prompts, and
+ * reporting only answered turns as dropped.
+ */
 class HistoryTrimmerTest {
     private final TokenCounter tokenCounter = new CharacterTokenCounter();
     private final ToolNoteRenderer toolNoteRenderer = new ToolNoteRenderer(new ObjectMapper());
@@ -20,7 +26,6 @@ class HistoryTrimmerTest {
         ChatMessage a2 = ChatMessage.builder().role(ChatMessage.Role.ASSISTANT).content("Hi 2").build();
 
         List<ChatMessage> history = List.of(u1, a1, u2, a2);
-        // Budget only allows 1 pair (2 tokens).
         int budget = tokenCounter.estimate("Hello 2") + tokenCounter.estimate("Hi 2");
         TrimmedHistory result = trimmer.trimToBudget(history, budget);
         List<org.springframework.ai.chat.messages.Message> trimmed = result.messages();

@@ -1,4 +1,4 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.history;
 
 import com.localmind.conversation.entity.ChatMessage;
 import java.util.List;

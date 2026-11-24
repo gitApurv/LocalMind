@@ -1,4 +1,4 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.advisor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -15,6 +15,10 @@ import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.prompt.Prompt;
 
+/**
+ * Unit tests for {@link PromptStructureAdvisor}: system prompt with base rules, custom instructions and pinned
+ * memories, and base rules kept when user data cannot be loaded.
+ */
 class PromptStructureAdvisorTest {
     private final UserRepository userRepository = mock(UserRepository.class);
     private final UserMemoryRepository memoryRepository = mock(UserMemoryRepository.class);

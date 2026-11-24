@@ -1,12 +1,16 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.advisor;
 
 import com.localmind.chat.config.PromptProperties;
+import com.localmind.chat.prompt.PromptAdvisor;
+import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.common.ai.ChatContextKeys;
 import com.localmind.common.ai.VectorFilters;
+import com.localmind.common.ai.VectorSearchDefaults;
 import com.localmind.memory.repository.UserMemoryRepository;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -17,27 +21,22 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.stereotype.Component;
 
-/** Step 2: appends semantically relevant (non-pinned) user memories to the system message. */
+/**
+ * Prompt step 2 (order 200): appends semantically relevant (non-pinned) user memories to the system message, within a
+ * budget of 200 tokens. Pinned memories are skipped because step 1 already includes them. Switched off by
+ * {@code localmind.prompt.memory.semantic}.
+ */
 @Component
+@RequiredArgsConstructor
 public class MemoryRetrievalAdvisor implements PromptAdvisor {
 
     private static final int ORDER = 200;
-    private static final int TOP_K = 5;
-    private static final double SIMILARITY_THRESHOLD = 0.4;
     private static final int MAX_MEMORY_TOKENS = 200;
 
     private final VectorStore vectorStore;
     private final UserMemoryRepository userMemoryRepository;
     private final TokenCounter tokenCounter;
-    private final boolean enabled;
-
-    public MemoryRetrievalAdvisor(VectorStore vectorStore, UserMemoryRepository userMemoryRepository,
-            TokenCounter tokenCounter, PromptProperties properties) {
-        this.vectorStore = vectorStore;
-        this.userMemoryRepository = userMemoryRepository;
-        this.tokenCounter = tokenCounter;
-        this.enabled = properties.memory().semantic();
-    }
+    private final PromptProperties properties;
 
     @Override
     public int getOrder() {
@@ -46,7 +45,7 @@ public class MemoryRetrievalAdvisor implements PromptAdvisor {
 
     @Override
     public ChatClientRequest apply(ChatClientRequest request, AdvisorChain chain) {
-        if (!enabled || request == null || request.context() == null) {
+        if (!properties.memory().semantic() || request == null || request.context() == null) {
             return request;
         }
         String userId = PromptAdvisor.contextString(request, ChatContextKeys.USER_ID);
@@ -71,12 +70,12 @@ public class MemoryRetrievalAdvisor implements PromptAdvisor {
 
     private List<Document> searchMemories(String userId, String query) {
         Filter.Expression filter = VectorFilters.userMemories(userId);
-        SearchRequest searchRequest = SearchRequest.builder().query(query.trim()).topK(TOP_K)
-                .similarityThreshold(SIMILARITY_THRESHOLD).filterExpression(filter).build();
+        SearchRequest searchRequest = SearchRequest.builder().query(query.trim())
+                .topK(VectorSearchDefaults.MEMORY_TOP_K)
+                .similarityThreshold(VectorSearchDefaults.MEMORY_SIMILARITY_THRESHOLD).filterExpression(filter).build();
         return vectorStore.similaritySearch(searchRequest);
     }
 
-    /** Pinned memories are already in the system prompt (step 1). */
     private Set<String> pinnedFacts(String userId) {
         return userMemoryRepository.findByUserIdAndPinnedTrue(userId).stream()
                 .map(memory -> memory.getMemoryFact().trim()).collect(Collectors.toSet());

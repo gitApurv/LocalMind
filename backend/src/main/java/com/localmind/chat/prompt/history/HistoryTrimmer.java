@@ -1,5 +1,6 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.history;
 
+import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.conversation.entity.ChatMessage;
 import java.util.ArrayList;
 import java.util.List;
@@ -61,16 +62,10 @@ public class HistoryTrimmer {
                 i--;
             }
         }
-        // Everything at or before index i did not fit.
         List<ChatMessage> dropped = List.copyOf(history.subList(0, i + 1));
         return new TrimmedHistory(converted, dropped);
     }
 
-    /**
-     * Drops user messages not directly followed by an assistant reply. The user message is saved before its turn
-     * streams, so a turn that failed, was stopped before any output, or was cut off by a restart leaves it unanswered;
-     * replaying it would show the model two user turns in a row, often the same question twice.
-     */
     private static List<ChatMessage> withoutUnansweredPrompts(List<ChatMessage> history) {
         if (history == null) {
             return List.of();

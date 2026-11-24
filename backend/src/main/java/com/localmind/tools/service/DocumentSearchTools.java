@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.localmind.common.ai.ChatContextKeys;
 import com.localmind.common.ai.VectorFilters;
 import com.localmind.common.ai.VectorMetadata;
+import com.localmind.common.ai.VectorSearchDefaults;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +17,11 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.stereotype.Component;
 
+/**
+ * LLM tool {@code searchUploadedDocs}: lets the model search the uploaded documents of the current conversation for
+ * relevant excerpts. The search is scoped to the user and conversation in the tool context, never to IDs the model
+ * supplies.
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -24,8 +30,6 @@ public class DocumentSearchTools {
     private static final String NAME = "searchUploadedDocs";
     private static final String DESCRIPTION = "Search uploaded documents and file attachments in the current conversation "
             + "for relevant information, excerpts, and answers.";
-    private static final int TOP_K = 4;
-    private static final double SIMILARITY_THRESHOLD = 0.4;
 
     private final VectorStore vectorStore;
 
@@ -47,8 +51,10 @@ public class DocumentSearchTools {
         String trimmedQuery = query.trim();
         try {
             Filter.Expression filter = VectorFilters.documentChunks(userId, conversationId);
-            SearchRequest searchRequest = SearchRequest.builder().query(trimmedQuery).topK(TOP_K)
-                    .similarityThreshold(SIMILARITY_THRESHOLD).filterExpression(filter).build();
+            SearchRequest searchRequest = SearchRequest.builder().query(trimmedQuery)
+                    .topK(VectorSearchDefaults.DOCUMENT_TOP_K)
+                    .similarityThreshold(VectorSearchDefaults.DOCUMENT_SIMILARITY_THRESHOLD).filterExpression(filter)
+                    .build();
             List<Document> matches = vectorStore.similaritySearch(searchRequest);
             if (matches == null || matches.isEmpty()) {
                 return "No relevant information found in uploaded documents for query: '" + trimmedQuery + "'.";

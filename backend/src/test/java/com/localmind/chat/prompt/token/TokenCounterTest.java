@@ -1,9 +1,12 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.token;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
+/**
+ * Unit tests for {@link CharacterTokenCounter}: token estimates for null, empty and normal text.
+ */
 class TokenCounterTest {
     private final TokenCounter tokenCounter = new CharacterTokenCounter();
 

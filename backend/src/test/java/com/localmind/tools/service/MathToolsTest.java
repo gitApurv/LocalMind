@@ -8,6 +8,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+/**
+ * Unit tests for {@link MathTools}: arithmetic evaluation, fixed error messages for division by zero, invalid syntax
+ * and blank input without exception text, and invocation through its function callback.
+ */
 class MathToolsTest {
 
     private MathTools mathTools;
@@ -24,7 +28,6 @@ class MathToolsTest {
     void evaluateValidExpressions(String expression, String expected) {
         String result = mathTools.calculateExpression(expression);
         assertNotNull(result);
-        // Normalize double representation if needed (e.g. 4 vs 4.0).
         double expectedVal = Double.parseDouble(expected);
         double actualVal = Double.parseDouble(result);
         assertEquals(expectedVal, actualVal, 0.0001);

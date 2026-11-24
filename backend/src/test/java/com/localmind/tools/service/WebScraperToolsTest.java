@@ -15,6 +15,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+/**
+ * Unit tests for {@link WebScraperTools}: clean text extraction and truncation, URL scheme checks, connection failures,
+ * redirects, non-text content, and the SSRF guard on every hop including restricted ranges and DNS rebinding. Pages are
+ * served by a local {@code HttpServer}.
+ */
 class WebScraperToolsTest {
 
     private WebScraperTools scraperTools;
@@ -108,7 +113,6 @@ class WebScraperToolsTest {
         assertNotNull(content);
         assertTrue(content.contains("LocalMind AI Release"));
         assertTrue(content.contains("LocalMind is an open-source, privacy-first conversational AI platform."));
-        // Scripts, styles, nav, footer should be removed.
         assertFalse(content.contains("console.log"));
         assertFalse(content.contains("font-family"));
         assertFalse(content.contains("Copyright 2026"));
@@ -199,7 +203,6 @@ class WebScraperToolsTest {
     @Test
     @DisplayName("readWebPage() should block a redirect that points into a private network")
     void blocksRedirectToPrivateNetwork() {
-        // Loopback is allowed so the test server is reachable; everything else uses the production rule.
         WebScraperTools guarded = new WebScraperTools(new WebScraperProperties(false),
                 address -> !address.isLoopbackAddress() && WebScraperTools.isRestrictedAddress(address));
 
@@ -229,8 +232,6 @@ class WebScraperToolsTest {
     @Test
     @DisplayName("readWebPage() should connect only to the addresses its SSRF check approved (DNS rebinding)")
     void connectsOnlyToCheckedAddresses() {
-        // 127.0.0.1 (the test server) plays the private target; ::1 plays a public address with nothing listening.
-        // A rebinding DNS server answers the first lookup with the allowed address and later ones with the target.
         AtomicInteger lookups = new AtomicInteger();
         WebScraperTools guarded = new WebScraperTools(new WebScraperProperties(false),
                 address -> address.getHostAddress().equals("127.0.0.1"),

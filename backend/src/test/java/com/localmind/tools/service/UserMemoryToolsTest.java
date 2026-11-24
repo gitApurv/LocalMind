@@ -21,6 +21,11 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 
+/**
+ * Unit tests for {@link UserMemoryTools}: saving facts with length and duplicate checks, recall by vector search with a
+ * capped database fallback, missing-user errors, fixed errors when embedding fails, and invocation through the function
+ * callbacks.
+ */
 @ExtendWith(MockitoExtension.class)
 class UserMemoryToolsTest {
 
@@ -33,9 +38,13 @@ class UserMemoryToolsTest {
     static class TestVectorStore implements VectorStore {
         final List<Document> addedDocuments = new ArrayList<>();
         List<Document> searchResults = new ArrayList<>();
+        RuntimeException addFailure;
 
         @Override
         public void add(List<Document> documents) {
+            if (addFailure != null) {
+                throw addFailure;
+            }
             addedDocuments.addAll(documents);
         }
 
@@ -56,7 +65,8 @@ class UserMemoryToolsTest {
     @BeforeEach
     void setUp() {
         vectorStore = new TestVectorStore();
-        userMemoryTools = new UserMemoryTools(userMemoryRepository, vectorStore);
+        userMemoryTools = new UserMemoryTools(userMemoryRepository, vectorStore,
+                new UserMemoryWriteService(userMemoryRepository, vectorStore));
     }
 
     @Test
@@ -232,5 +242,16 @@ class UserMemoryToolsTest {
         assertTrue(result.startsWith("Saved User Memories (newest 20 of 25):"));
         assertTrue(result.contains("Fact 19"));
         assertFalse(result.contains("Fact 20"));
+    }
+
+    @Test
+    @DisplayName("saveUserMemory() should return a fixed error without exception text when embedding fails")
+    void saveUserMemoryEmbeddingFailure() {
+        vectorStore.addFailure = new IllegalStateException("qdrant down at 10.0.0.5");
+
+        String result = userMemoryTools.saveUserMemory("Likes tea", new ToolContext(Map.of("userId", "user-42")));
+
+        assertEquals("Error: the memory could not be saved right now.", result);
+        verify(userMemoryRepository, never()).deleteById(any());
     }
 }

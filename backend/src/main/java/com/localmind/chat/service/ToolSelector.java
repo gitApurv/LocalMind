@@ -1,4 +1,4 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.service;
 
 import com.localmind.attachment.entity.Attachment;
 import com.localmind.attachment.repository.AttachmentRepository;

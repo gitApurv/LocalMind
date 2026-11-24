@@ -1,5 +1,6 @@
-package com.localmind.chat.prompt;
+package com.localmind.chat.prompt.advisor;
 
+import com.localmind.chat.prompt.PromptAdvisor;
 import com.localmind.common.ai.ChatContextKeys;
 import com.localmind.memory.entity.UserMemory;
 import com.localmind.memory.repository.UserMemoryRepository;
@@ -17,9 +18,10 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Component;
 
 /**
- * Step 1: builds the system message from the base rules, the request's system prompt, the user's custom instructions
- * and pinned memories. If the user's data cannot be loaded, the base rules and request system prompt are still sent:
- * returning the request unchanged would drop the rule that document excerpts are data, not instructions.
+ * Prompt step 1 (order 100): builds the system message from the base rules, the request's system prompt, the user's
+ * custom instructions and pinned memories. If the user's data cannot be loaded, the base rules and request system
+ * prompt are still sent: returning the request unchanged would drop the rule that document excerpts are data, not
+ * instructions.
  */
 @Slf4j
 @Component

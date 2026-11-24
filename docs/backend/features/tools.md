@@ -18,7 +18,7 @@ the server-built `ToolContext`, never from model arguments.
 - Call SearXNG over the `shortTimeoutRestClient`.
 - Fetch model-chosen URLs with an SSRF guard that validates every redirect hop.
 
-Not owned here: which tools are offered per turn (`chat.prompt.ToolSelector`), the per-turn call cap, SSE
+Not owned here: which tools are offered per turn (`chat.service.ToolSelector`), the per-turn call cap, SSE
 `TOOL_START`/`TOOL_END` events and the audit trail (`chat.service.MonitoredToolCallback`). See
 [PROMPT_GENERATION_PROCESS.md](../../PROMPT_GENERATION_PROCESS.md).
 
@@ -26,11 +26,12 @@ Not owned here: which tools are offered per turn (`chat.prompt.ToolSelector`), t
 
 | Class | Layer | Role |
 | --- | --- | --- |
-| [`SearxngProperties`](../../../backend/src/main/java/com/localmind/tools/config/SearxngProperties.java) | config | `localmind.tools.searxng` record: SearXNG base URL (trailing `/` stripped). |
+| [`SearxngProperties`](../../../backend/src/main/java/com/localmind/tools/config/SearxngProperties.java) | config | `localmind.tools.searxng` record: SearXNG base URL (trimmed, trailing `/` stripped, null/blank → `http://127.0.0.1:8081`). |
 | [`WebScraperProperties`](../../../backend/src/main/java/com/localmind/tools/config/WebScraperProperties.java) | config | `localmind.tools.scraper` record: `allowPrivateSubnets` switch that disables the SSRF guard. |
 | [`DateTimeTools`](../../../backend/src/main/java/com/localmind/tools/service/DateTimeTools.java) | service | `getCurrentDateTime` tool. |
 | [`MathTools`](../../../backend/src/main/java/com/localmind/tools/service/MathTools.java) | service | `calculateExpression` tool (exp4j). |
 | [`UserMemoryTools`](../../../backend/src/main/java/com/localmind/tools/service/UserMemoryTools.java) | service | `saveUserMemory` and `recallUserMemories` tools. |
+| [`UserMemoryWriteService`](../../../backend/src/main/java/com/localmind/tools/service/UserMemoryWriteService.java) | service | `@Transactional saveIfAbsent(userId, fact)` behind `saveUserMemory`: duplicate check, row insert and embedding in one transaction. A separate bean so the tool can catch every failure, commit failures included, and the transaction proxy is not bypassed by a self-call. |
 | [`WebSearchTools`](../../../backend/src/main/java/com/localmind/tools/service/WebSearchTools.java) | service | `searchWeb` tool (SearXNG JSON API). |
 | [`WebScraperTools`](../../../backend/src/main/java/com/localmind/tools/service/WebScraperTools.java) | service | `readWebPage` tool (Apache HttpClient 5 with an SSRF-guarded DNS resolver, Jsoup for parsing, manual redirects). |
 | [`DocumentSearchTools`](../../../backend/src/main/java/com/localmind/tools/service/DocumentSearchTools.java) | service | `searchUploadedDocs` tool (Qdrant similarity search). |
@@ -57,7 +58,7 @@ object is mapped to a `null` argument by every callback.
 
 ### Selection (brief)
 
-[`ToolSelector#selectTools(model, message, conversationId, toolsRequested)`](../../../backend/src/main/java/com/localmind/chat/prompt/ToolSelector.java)
+[`ToolSelector#selectTools(model, message, conversationId, toolsRequested)`](../../../backend/src/main/java/com/localmind/chat/service/ToolSelector.java)
 returns no tools when `toolsRequested` is `false` or `ModelCatalogService.supportsTools(model)` is `false`. Otherwise it
 returns, in order: `getCurrentDateTime`, `calculateExpression`, `saveUserMemory`, `recallUserMemories`, `searchWeb`; plus
 `readWebPage` if the lower-cased message contains `http://`, `https://` or `www.`; plus `searchUploadedDocs` if
@@ -101,7 +102,7 @@ and sets the tool context to `{userId, conversationId}`. Details live in the cha
 | Parameters | `fact` (string); trimmed before storing |
 | Context | `ChatContextKeys.USER_ID` |
 | Returns | `Memory saved successfully: <trimmed fact>`; `Memory already saved: <trimmed fact>` when the user already has a memory with exactly this text (`UserMemoryRepository.existsByUserIdAndMemoryFact(userId, trimmedFact)`), in which case nothing is stored |
-| Effects | Inserts a `user_memories` row (new UUID id, `user_id`, `memory_fact`; `pinned=false`, `created_at` from `@PrePersist`), then adds one Qdrant document with text = fact and metadata `{userId, type: "USER_MEMORY", memoryId}`. If the vector add throws, the row is deleted again (`deleteById`) and the error string is returned. |
+| Effects | In one transaction (`UserMemoryWriteService.saveIfAbsent`): inserts a `user_memories` row (new UUID id, `user_id`, `memory_fact`; `pinned=false`, `created_at` from `@PrePersist`), then adds one Qdrant document with text = fact and metadata `{userId, type: "USER_MEMORY", memoryId}`. If the vector add throws, the transaction rolls the row back and the error string is returned; if the transaction rolls back after the add, a `TransactionHooks` rollback hook deletes the point again (`VectorFilters.userMemory(userId, memoryId)`). |
 | Limits | trimmed fact at most 1000 characters (`MAX_FACT_LENGTH`); the column is `TEXT` |
 
 | Situation | Returned string |
@@ -118,7 +119,7 @@ and sets the tool context to `{userId, conversationId}`. Details live in the cha
 | Description | `Recall or retrieve previously saved user facts, personal preferences, and notes relevant to a topic or query.` |
 | Parameters | `query` (string, optional) |
 | Context | `ChatContextKeys.USER_ID` |
-| Algorithm | If `query` is non-blank: Qdrant similarity search on the trimmed query, `topK = 5`, `similarityThreshold = 0.3`, filter `VectorFilters.userMemories(userId)` (`userId == ? AND type == "USER_MEMORY"`). Non-empty result → `Recalled User Memories for '<query>':` followed by `1. <text>` lines. Empty result, failed search (logged at debug, swallowed) or no query → the newest 20 rows (`MAX_LISTED_MEMORIES`) of `UserMemoryRepository.findByUserIdOrderByCreatedAtDesc(userId)` as `Saved User Memories:` + numbered lines; when the user has more than 20 memories the header is `Saved User Memories (newest 20 of <total>):`. |
+| Algorithm | If `query` is non-blank: Qdrant similarity search on the trimmed query, `topK = VectorSearchDefaults.MEMORY_TOP_K` (5), `similarityThreshold = VectorSearchDefaults.MEMORY_RECALL_SIMILARITY_THRESHOLD` (0.3, deliberately wider than the 0.4 of automatic memory injection because the model asked for memories on this topic), filter `VectorFilters.userMemories(userId)` (`userId == ? AND type == "USER_MEMORY"`). Non-empty result → `Recalled User Memories for '<query>':` followed by `1. <text>` lines. Empty result, failed search (logged at debug, swallowed) or no query → the newest 20 rows (`MAX_LISTED_MEMORIES`) of `UserMemoryRepository.findByUserIdOrderByCreatedAtDesc(userId)` as `Saved User Memories:` + numbered lines; when the user has more than 20 memories the header is `Saved User Memories (newest 20 of <total>):`. |
 | Limits | semantic path: 5 results; fallback path: 20 newest memories |
 
 | Situation | Returned string |
@@ -235,7 +236,7 @@ flowchart TD
 | Description | `Search uploaded documents and file attachments in the current conversation for relevant information, excerpts, and answers.` |
 | Parameters | `query` (string); trimmed |
 | Context | `ChatContextKeys.USER_ID`, `ChatContextKeys.CONVERSATION_ID` |
-| Qdrant read | similarity search, `topK = 4`, `similarityThreshold = 0.4`, filter `VectorFilters.documentChunks(userId, conversationId)` (`userId == ? AND conversationId == ? AND type == "DOC_CHUNK"`) |
+| Qdrant read | similarity search, `topK = VectorSearchDefaults.DOCUMENT_TOP_K` (4), `similarityThreshold = VectorSearchDefaults.DOCUMENT_SIMILARITY_THRESHOLD` (0.4), filter `VectorFilters.documentChunks(userId, conversationId)` (`userId == ? AND conversationId == ? AND type == "DOC_CHUNK"`) |
 | Returns | `Found <n> relevant excerpt(s) in uploaded documents for '<query>':` then per match `--- Excerpt N (Source: <fileName metadata or "Unknown Document">) ---` + trimmed chunk text, trimmed overall |
 | Limits | 4 excerpts; excerpt text not truncated (chunk size set by the attachment ETL) |
 
@@ -271,7 +272,8 @@ Records (all public nested records of the tool classes unless noted; no Bean Val
 1. Tenant-scoped tools read `userId`/`conversationId` only from the `ToolContext`; blank values count as missing and
    produce an error string, never a fallback.
 2. Every Qdrant query uses a `VectorFilters` expression scoped to the user (and conversation for documents).
-3. A memory is saved to MySQL first, then embedded; if embedding fails the row is deleted so both stores stay in sync.
+3. A memory row and its embedding are written in one transaction: if embedding fails the row rolls back, and if the
+   transaction rolls back after embedding the point is deleted, so both stores stay in sync.
 4. `saveUserMemory` stores a fact only once per user: an exact duplicate of the trimmed text is not saved again.
 5. `recallUserMemories` falls back to listing the user's 20 newest memories when the query is blank, the
    semantic search returns nothing, or it fails.
@@ -282,22 +284,24 @@ Records (all public nested records of the tool classes unless noted; no Bean Val
 
 ## Side effects & async work
 
-- No `TransactionHooks`, `@Async` or `@Modifying` usage. `saveUserMemory` runs outside any explicit transaction:
-  `UserMemoryRepository.existsByUserIdAndMemoryFact` and `save` each run on their own, `save` commits on its own, then `vectorStore.add` runs; the compensating `deleteById` is manual.
+- `saveUserMemory` delegates to `UserMemoryWriteService.saveIfAbsent` (`@Transactional`): duplicate check, `save`
+  and `vectorStore.add` run in one transaction, with a `TransactionHooks.onOutcome` rollback hook that deletes the
+  point by `VectorFilters.userMemory(userId, memoryId)`. No `@Async` or `@Modifying` usage.
 - Qdrant writes: `saveUserMemory` adds one point with metadata `userId`, `type=USER_MEMORY`, `memoryId`.
 - Qdrant reads: `recallUserMemories` (`VectorFilters.userMemories`), `searchUploadedDocs`
-  (`VectorFilters.documentChunks`, reads metadata `fileName`). No deletes.
+  (`VectorFilters.documentChunks`, reads metadata `fileName`). The only delete is the rollback hook above.
 - External HTTP: SearXNG `GET /search` (5 s timeouts) and arbitrary public web pages via Apache HttpClient 5 (10 s timeouts, SSRF-guarded DNS resolver).
 
 ## Configuration
 
 | Property | Env var | Default | Effect |
 | --- | --- | --- | --- |
-| `localmind.tools.searxng.base-url` | `SEARXNG_BASE_URL` | `http://127.0.0.1:8081` (yml and record) | SearXNG endpoint; a trailing `/` is removed. |
+| `localmind.tools.searxng.base-url` | `SEARXNG_BASE_URL` | `http://127.0.0.1:${SEARXNG_PORT:8081}` in yml, so it follows the port Compose publishes SearXNG on; `http://127.0.0.1:8081` in the record for null/blank | SearXNG endpoint; trimmed, a trailing `/` is removed. |
 | `localmind.tools.scraper.allow-private-subnets` | `SCRAPER_ALLOW_PRIVATE_SUBNETS` | `false` | `true` disables the address check in `readWebPage`. |
 
-Hard-coded constants (not configurable): result counts, similarity thresholds, scraper timeout/body size/redirect
-limit/user agent. The SearXNG timeouts come from `common.config.WebMvcConfig` (`HTTP_CLIENT_TIMEOUT = 5s`).
+Hard-coded constants (not configurable): result counts, scraper timeout/body size/redirect
+limit/user agent. Vector-search result counts and similarity thresholds are shared with the chat prompt advisors
+through `common.ai.VectorSearchDefaults`. The SearXNG timeouts come from `common.config.WebMvcConfig` (`HTTP_CLIENT_TIMEOUT = 5s`).
 
 ## Errors
 
@@ -311,9 +315,9 @@ No `ApiException` is thrown; every tool failure is a string returned to the mode
 ## Interactions with other features
 
 - Uses: `memory.entity.UserMemory`, `memory.repository.UserMemoryRepository`; `common.ai.ChatContextKeys`,
-  `VectorFilters`, `VectorMetadata`; `common.config.WebMvcConfig#shortTimeoutRestClient`; Spring AI `VectorStore`
+  `VectorFilters`, `VectorMetadata`, `VectorSearchDefaults`; `common.transaction.TransactionHooks`; `common.config.WebMvcConfig#shortTimeoutRestClient`; Spring AI `VectorStore`
   (Qdrant, documents written by the `attachment` ETL).
-- Used by: `chat.prompt.ToolSelector` (selects callbacks) and `chat.service.ChatOrchestratorService` (wraps them in
+- Used by: `chat.service.ToolSelector` (selects callbacks) and `chat.service.ChatOrchestratorService` (wraps them in
   `MonitoredToolCallback`, supplies the tool context).
 
 ## Tests
@@ -322,8 +326,10 @@ No `ApiException` is thrown; every tool failure is a string returned to the mode
 | --- | --- |
 | [`DateTimeToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/DateTimeToolsTest.java) | Output format; callback invocation. |
 | [`MathToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/MathToolsTest.java) | Parameterised valid expressions, division by zero, syntax error, blank input, fixed error messages without exception text, callback. |
-| [`UserMemoryToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/UserMemoryToolsTest.java) | Save (DB + vector metadata), missing user, blank fact, fact over 1000 characters rejected without storing, exact duplicate not stored again, semantic recall, DB fallback, fallback capped to the newest 20 with the `newest N of M` header, callbacks. |
+| [`UserMemoryToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/UserMemoryToolsTest.java) | Save (DB + vector metadata), missing user, blank fact, fact over 1000 characters rejected without storing, exact duplicate not stored again, semantic recall, DB fallback, fallback capped to the newest 20 with the `newest N of M` header, callbacks, embedding failure returns the fixed error string without deleting the row by hand. |
+| [`UserMemoryWriteServiceTest`](../../../backend/src/test/java/com/localmind/tools/service/UserMemoryWriteServiceTest.java) | Row and embedding share the memory id, duplicate skipped without touching the vector store, embedding failure propagates (so the transaction rolls back), rollback after the add deletes the point, commit keeps it. |
+| [`SearxngPropertiesTest`](../../../backend/src/test/java/com/localmind/tools/config/SearxngPropertiesTest.java) | Null/blank base URL → default, trimmed without trailing `/`. |
 | [`WebSearchToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/WebSearchToolsTest.java) | SearXNG request URL and parsing (`MockRestServiceServer`), blank query (no HTTP call), server error reported as the fixed "unavailable" string instead of "no results", trimmed query in the no-results message, callback formatting. |
 | [`WebScraperToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/WebScraperToolsTest.java) | Local `HttpServer`: extraction, truncation, uppercase scheme, bad schemes, connection failure, SSRF ranges, redirect follow, redirect into private network, redirect loop, CGNAT/ULA/mapped ranges, parameterised special-purpose IPv4 ranges (`192.0.0.0/24`, `198.18.0.0/15`, `240.0.0.0/4`, broadcast) and IPv6 forms embedding IPv4 (NAT64, local-use NAT64, 6to4, Teredo, IPv4-compatible, IPv4-mapped; public embedded addresses allowed), a single checked DNS lookup per hop under a rebinding DNS answer, host with any private address blocked, connection through the guarded resolver, non-text content rejected. |
 | [`DocumentSearchToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/DocumentSearchToolsTest.java) | Match formatting, empty result, missing context, blank query, callback. |
-| [`ToolSelectorTest`](../../../backend/src/test/java/com/localmind/chat/prompt/ToolSelectorTest.java) | No tools for unsupported model / tools off; doc search only with READY attachments; scraper only with a URL. |
+| [`ToolSelectorTest`](../../../backend/src/test/java/com/localmind/chat/service/ToolSelectorTest.java) | No tools for unsupported model / tools off; doc search only with READY attachments; scraper only with a URL. |
