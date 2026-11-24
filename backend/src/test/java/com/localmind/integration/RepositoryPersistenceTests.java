@@ -12,6 +12,7 @@ import com.localmind.conversation.repository.ChatMessageRepository;
 import com.localmind.conversation.repository.ConversationRepository;
 import com.localmind.memory.entity.UserMemory;
 import com.localmind.memory.repository.UserMemoryRepository;
+import com.localmind.support.OfflineAiStack;
 import com.localmind.user.entity.User;
 import com.localmind.user.repository.UserRepository;
 import jakarta.persistence.EntityManager;
@@ -26,7 +27,14 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Integration tests for the JPA repositories: persistence and queries for users, refresh tokens, conversations and
+ * messages, attachments and memories, plus the targeted updates and bulk deletes (attachment outcome and
+ * interrupted-ingestion failure, expired-token cleanup, summary watermark). Runs transactionally on the test profile
+ * (H2).
+ */
 @SpringBootTest
+@OfflineAiStack
 @ActiveProfiles("test")
 @Transactional
 class RepositoryPersistenceTests {

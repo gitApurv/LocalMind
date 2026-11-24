@@ -2,6 +2,7 @@ package com.localmind.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.localmind.support.OfflineAiStack;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
@@ -19,10 +20,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
 /**
- * The indexes declared on the entities exist in the generated schema, with their columns in order. Every list query
- * filters by owner or conversation and sorts by a timestamp, so a missing index means a full table scan.
+ * Integration tests for the generated schema's indexes: each index declared on the entities exists with its columns in
+ * order. Every list query filters by owner or conversation and sorts by a timestamp, so a missing index means a full
+ * table scan. Runs on the test profile (H2).
  */
 @SpringBootTest
+@OfflineAiStack
 @ActiveProfiles("test")
 class SchemaIndexTest {
 
@@ -40,7 +43,6 @@ class SchemaIndexTest {
         assertThat(indexColumns(table)).containsEntry(index, List.of(columns.split(",")));
     }
 
-    /** Index name to its columns in key order, read from JDBC metadata so the check does not depend on the dialect. */
     private Map<String, List<String>> indexColumns(String table) throws SQLException {
         Map<String, Map<Short, String>> byIndex = new TreeMap<>();
         try (Connection connection = dataSource.getConnection();
