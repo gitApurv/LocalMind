@@ -25,8 +25,13 @@ Hibernate's schema update creates any that are missing, by name, on an existing 
 | `attachments` | `idx_attachments_conversation_created` | `conversation_id, created_at` | Attachment list, `READY` check on every chat turn, conversation delete |
 | `user_memories` | `idx_user_memories_user_created` | `user_id, created_at` | Memory vault, pinned memories on every chat turn |
 
-Lookups by id plus owner (`existsByIdAndUserId`, `findByIdAndUserId`) use the primary key. `SchemaIndexTest` checks
-that each index exists with its columns in order.
+Lookups by id plus owner (`ConversationRepository#existsByIdAndUserId`, `#findByIdAndUserId` and the
+`PESSIMISTIC_WRITE` `#findLockedByIdAndUserId`) and memory/attachment lookups by id use the primary key.
+`SchemaIndexTest` checks that each index exists with its columns in order.
+
+`findLockedByIdAndUserId` (`SELECT ... FOR UPDATE`) is the only row lock in the schema: an attachment upload and a
+conversation delete both take it on the `conversations` row first, so they never interleave (see
+[conversation.md](features/conversation.md#business-rules)).
 
 ```mermaid
 erDiagram
@@ -82,7 +87,7 @@ erDiagram
         varchar255 file_name
         varchar100 file_type
         bigint file_size
-        enum status "PENDING, PROCESSING, READY, FAILED"
+        enum status "PROCESSING, READY, FAILED"
         int chunk_count
         text error_message
         timestamp created_at
@@ -117,7 +122,7 @@ of points share it, distinguished by the `type` payload:
 | `DOC_CHUNK` | `DocumentEtlService` (attachment ETL) | `userId`, `conversationId`, `attachmentId`, `fileName`, `chunkIndex` | The conversation is deleted (after commit) |
 | `USER_MEMORY` | `UserMemoryTools.saveUserMemory` | `userId`, `memoryId` | The memory is deleted through `DELETE /api/memories/{id}` (after commit) |
 
-Keyword payload indexes exist on `userId`, `conversationId`, `type` and `memoryId` (`QdrantConfig`). Searches always
+Keyword payload indexes exist on `userId`, `conversationId`, `type`, `memoryId` and `attachmentId` (`QdrantConfig`). Searches always
 use a [`VectorFilters`](features/common.md#vector-store-conventions) expression that includes the caller's `userId`.
 
 | Reader | Filter | topK | Similarity threshold |

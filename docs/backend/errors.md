@@ -6,11 +6,11 @@ Every error response from the backend is an [RFC 9457](https://www.rfc-editor.or
 ```json
 {
   "type": "about:blank",
-  "title": "Not Found",
-  "status": 404,
-  "detail": "Conversation not found",
-  "instance": "/api/conversations/42",
-  "message": "Conversation not found"
+  "title": "Conflict",
+  "status": 409,
+  "detail": "Email is already registered",
+  "instance": "/api/auth/register",
+  "message": "Email is already registered"
 }
 ```
 
@@ -29,13 +29,14 @@ Every error response from the backend is an [RFC 9457](https://www.rfc-editor.or
 | Access denied in the filter chain | `ProblemDetailSecurityHandler` | 403 `You do not have access to this resource` |
 | Anything else | `GlobalExceptionHandler#handleUnexpected` | 500 `An unexpected error occurred. Please try again.`; full exception logged |
 | Errors during a chat stream | `ChatOrchestratorService` | Sent as an SSE `ERROR` event, not a `ProblemDetail`; see [chat streaming](flows/chat-streaming.md) |
+| Invalid configuration at startup | `@ConfigurationProperties` compact constructors | Not an HTTP error: the application fails to start, e.g. `localmind.storage.allowed-extensions` with a value outside `pdf, txt, docx, md` throws `IllegalArgumentException` |
 
 ## Exception types
 
 | Exception | Status | Use for |
 | --- | --- | --- |
 | `BadRequestException` | 400 | Invalid input that Bean Validation cannot express (file type, empty file, ...) |
-| `UnauthorizedException` | 401 | Bad credentials, invalid or expired refresh token, no authenticated user |
+| `UnauthorizedException` | 401 | Bad credentials, invalid or expired refresh token, no authenticated user, token for a user that no longer exists (`User not found`) |
 | `AccessDeniedException` (Spring Security) | 403 | The caller does not own the resource |
 | `ResourceNotFoundException` | 404 | The resource does not exist |
 | `ConflictException` | 409 | Unique constraint at the business level (e.g. email already registered) |

@@ -165,7 +165,7 @@ The schema is generated from the JPA entities by Hibernate (`spring.jpa.hibernat
 | `refresh_tokens` | `auth.entity.RefreshToken` | `id`, `user_id`, `token_hash` (255, unique, SHA-256 of the raw token), `expires_at`, `revoked`, `rotated_at`, `created_at` | `rotated_at` is set only when a token is exchanged, not on logout (Section 4.1). |
 | `conversations` | `conversation.entity.Conversation` | `id`, `user_id`, `title` (255), `model_name` (100), `summary` (TEXT), `summarized_through`, `pinned`, `created_at`, `updated_at` | Default title `New Chat` until auto-titled. `summarized_through` marks the newest message already folded into `summary`. |
 | `messages` | `conversation.entity.ChatMessage` | `id`, `conversation_id`, `role` (`USER`/`ASSISTANT`), `content` (LONGTEXT), `reasoning_content` (LONGTEXT), `tool_calls` (JSON), `token_count`, `created_at` | `tool_calls` is the audit trail of tool invocations for the turn. |
-| `attachments` | `attachment.entity.Attachment` | `id`, `conversation_id`, `user_id`, `file_name` (255), `file_type` (100), `file_size`, `status` (`PENDING`/`PROCESSING`/`READY`/`FAILED`), `chunk_count`, `error_message` (TEXT), `created_at` | `error_message` holds a fixed user-facing text, never exception details. |
+| `attachments` | `attachment.entity.Attachment` | `id`, `conversation_id`, `user_id`, `file_name` (255), `file_type` (100), `file_size`, `status` (`PROCESSING`/`READY`/`FAILED`), `chunk_count`, `error_message` (TEXT), `created_at` | `error_message` holds a fixed user-facing text, never exception details. |
 | `user_memories` | `memory.entity.UserMemory` | `id`, `user_id`, `memory_fact` (TEXT), `pinned`, `created_at` | Pinned memories are always included in the system prompt. |
 
 Request validation mirrors these column sizes (e.g. `@Size(max = 100)` on `fullName`), so oversized input is rejected with `400` before it reaches the database.
@@ -275,8 +275,8 @@ Tokens are never written to browser storage:
 **Error format.** Every error is an RFC 9457 `application/problem+json` body with an extra `message` property that the frontend displays:
 
 ```json
-{ "type": "about:blank", "title": "Not Found", "status": 404, "detail": "Memory not found",
-  "message": "Memory not found" }
+{ "type": "about:blank", "title": "Conflict", "status": 409, "detail": "Email is already registered",
+  "message": "Email is already registered" }
 ```
 
 Business errors (`ApiException` subclasses), validation errors, standard Spring MVC errors and 401/403 from the security filter chain (`ProblemDetailSecurityHandler`, which keeps the `WWW-Authenticate` header) all use this format. Unexpected exceptions return `500` with a generic message; exception details are only logged.
@@ -301,7 +301,7 @@ public class OwnershipGuard {
 }
 ```
 
-A violation becomes a `403` ProblemDetail. Attachments are additionally loaded with `findByIdAndUserId` and must belong to the conversation in the URL; memories are loaded with `findByIdAndUserId`, so another user's memory is reported as `404`. Tools receive `userId` and `conversationId` through the server-built `ToolContext`, never from model arguments.
+A violation becomes a `403` ProblemDetail. Attachments must also belong to the caller and to the conversation in the URL, and memories to the caller; an unknown id is `403` too, so ids cannot be probed. Tools receive `userId` and `conversationId` through the server-built `ToolContext`, never from model arguments.
 
 ---
 
@@ -398,7 +398,7 @@ sequenceDiagram
     Backend->>Ollama: GET /api/tags
     Ollama-->>Backend: Models with capabilities ["completion", "tools", ...]
     Note over Backend: ModelCatalogService: capabilities cached<br/>on startup from Ollama
-    Backend-->>User: ModelInfo list with supportsTools and defaultModel
+    Backend-->>User: ModelInfoResponse list with supportsTools and defaultModel
 
     Note over User, Backend: Tier 2: Client gating
     alt Selected model lacks tool support

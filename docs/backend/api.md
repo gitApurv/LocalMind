@@ -72,7 +72,8 @@ Memories are created only by the model through the `saveUserMemory` tool.
 ## Common behaviour
 
 - **Ownership.** Any `{id}`/`{conversationId}` that is not the caller's conversation returns 403, including ids that
-  do not exist. A memory that is not the caller's returns 404.
+  do not exist. The same holds for memory and attachment ids: unknown, another user's, or (for attachments) belonging
+  to another conversation all return 403, so ids cannot be probed.
 - **Lists are not paginated.**
 - **Validation** failures return 400 with `message` = `field: error; field: error`.
 - **Request size.** Multipart uploads above `UPLOAD_MAX_FILE_SIZE` (25 MB) or `UPLOAD_MAX_REQUEST_SIZE` (30 MB) return

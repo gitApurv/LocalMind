@@ -40,7 +40,9 @@ flowchart LR
 | `common` | Security, errors, transaction hooks, vector conventions, HTTP clients | [common.md](features/common.md) |
 
 Inside each feature, classes sit in layer sub-packages (`controller`, `service`, `repository`, `entity`, `dto`,
-`model`, `config`) plus at most one purpose-named package (`chat/prompt`, `attachment/storage`).
+`model`, `config`) plus at most one purpose-named package (`chat/prompt`, `attachment/storage`). `chat/prompt`
+keeps its `PromptAdvisor` contract at the root and splits the rest by role: `advisor/` (the five pipeline steps),
+`history/` (history trimming) and `token/` (token estimation).
 
 ### Dependencies between features
 
@@ -89,7 +91,7 @@ after the servlet thread is released. See [flows/chat-streaming.md](flows/chat-s
   `@Async` executor. There is no custom executor.
 - `@Async` jobs: `DocumentEtlService` (ingestion), `AutoTitleService` (conversation titles),
   `ConversationSummaryService` (rolling summaries). Each is triggered after commit.
-- Scheduled jobs (`@EnableScheduling`): `RefreshTokenCleanupService` deletes expired refresh tokens every hour.
+- Scheduled jobs (`@EnableScheduling`): `RefreshTokenCleanupScheduler` calls `RefreshTokenCleanupService` (transactional) every hour to delete expired refresh tokens.
 - Startup (`ApplicationReadyEvent`): `InterruptedIngestionRecovery` marks attachments left `PROCESSING` by a restart
   as `FAILED`. The model catalogue is loaded earlier, in `ModelCatalogService`'s `@PostConstruct`.
 - Code running outside the request transaction (end of a stream, `@Async` jobs) never saves an entity it loaded

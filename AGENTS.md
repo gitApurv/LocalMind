@@ -43,13 +43,13 @@ Code is grouped first by business capability (feature), then by layer inside eac
 | `model/` | Internal value objects/records that are not entities and not HTTP DTOs |
 | `config/` | `@ConfigurationProperties` records and feature-specific `@Configuration` |
 
-A feature may add one purpose-named component sub-package when a group of classes forms its own pipeline or infrastructure (`chat/prompt`, `attachment/storage`). Nothing else lives at a feature's root.
+A feature may add one purpose-named component sub-package when a group of classes forms its own pipeline or infrastructure (`chat/prompt`, `attachment/storage`). Nothing else lives at a feature's root. When such a package grows past a handful of classes, split it by role: its contract stays at its root, the parts go in role-named sub-packages (`chat/prompt/advisor`, `history`, `token`).
 
 ```text
 com.localmind
 ├── LocalMindApplication.java
 ├── common/                 # cross-cutting code, no business logic
-│   ├── ai/                 # ChatContextKeys, VectorMetadata, VectorFilters
+│   ├── ai/                 # ChatContextKeys, VectorMetadata, VectorFilters, VectorSearchDefaults
 │   ├── config/             # WebMvcConfig (shortTimeoutRestClient), QdrantConfig, QdrantProperties
 │   ├── exception/          # ApiException hierarchy, ProblemDetails, GlobalExceptionHandler
 │   ├── security/           # SecurityConfig, JWT/CORS properties, signing-key store, @CurrentUserId
@@ -65,8 +65,11 @@ com.localmind
 │   ├── config/  controller/  dto/  entity/  repository/  service/
 │   └── storage/            # FileStorageService abstraction + local-disk implementation
 ├── chat/                   # streaming chat orchestration and SSE events
-│   ├── config/  controller/  dto/  service/
-│   └── prompt/             # Spring AI advisors that assemble the prompt, ToolSelector
+│   ├── config/  controller/  dto/  model/  service/
+│   └── prompt/             # PromptAdvisor: the ordered prompt-assembly pipeline
+│       ├── advisor/        # the five steps: structure, memories, RAG, history, stats
+│       ├── history/        # HistoryTrimmer, TrimmedHistory, ToolNoteRenderer
+│       └── token/          # TokenCounter, CharacterTokenCounter
 ├── llm/                    # model catalogue (/api/models) and model profiles
 │   ├── config/  controller/  dto/  model/  service/
 └── tools/                  # LLM-callable tools
@@ -136,15 +139,40 @@ com.localmind
 - Java formatting is defined by `backend/eclipse-formatter.xml` and applied by Spotless (see "Formatting Rules" below).
 - Methods do one thing; extract private helpers when a method exceeds ~30 lines or nests more than two levels.
 - Prefer early returns over nested `if`s, `Optional`/streams over manual null juggling, and `java.time` types for time.
-- Comments explain *why*, not *what*. No commented-out code, no empty blocks.
+- The class-level Javadoc (below) is the only comment in backend Java code, main and test: no method, field or inline comments, and no commented-out code. Tests state their intent in `@DisplayName`. Put the *why* in the class Javadoc or in `docs/backend/`. No empty blocks.
+- Every top-level type has one class-level Javadoc. Its first sentence is a summary in the fixed form for its layer; optional sentences after it give the why, constraints or non-obvious behaviour; records add `@param` only for components whose meaning is not obvious:
+
+  | Kind | First sentence |
+  | --- | --- |
+  | Controller | `REST endpoints for <what> under {@code /api/...}.` |
+  | Service / component | Verb phrase: `Streams one chat turn from ...` |
+  | Repository | `Spring Data repository for {@link X} (table {@code t}).` |
+  | Entity | `JPA entity for table {@code t}: <what one row is>.` |
+  | Request / response DTO | `Request body of {@code METHOD /api/path}: ...` / `Response body of {@code METHOD /api/path}: ...` |
+  | `@ConfigurationProperties` record | `Settings bound from {@code localmind.<prefix>}: ...` |
+  | `@Configuration` class | `Spring configuration for ...` |
+  | Exception | `Thrown when ...; rendered as {@code <status>} by {@link GlobalExceptionHandler}.` |
+  | Model record, value object, enum, utility | Noun or verb phrase: `Outcome of a login: ...` |
+  | Interface (not a repository) | What implementations do, as a verb phrase: `Estimates how many tokens ...` |
+  | Prompt advisor | `Prompt step <n> (order <n00>): ...` |
+  | LLM tools (`XTools`) | `LLM tool {@code <toolName>}: ...` |
 - Naming: `XController`, `XService`, `XRepository`, `XRequest`/`XResponse` for DTOs, `XProperties` for configuration, `XAdvisor` for prompt advisors, `XTools` for LLM tools.
 
 ### 7. Tests
 
 - Unit tests construct the class under test directly with mocks (`Mockito`) and real records for properties. Build default properties with `support/TestProperties` (`llmDefaults()`, `promptDefaults()`, `fileStorage(dir)`); production records carry no test-only factories. Never let a unit test depend on a service that may or may not run on the machine (use test doubles such as `support/OfflineModelCatalog`).
-- `@SpringBootTest` and `@WebMvcTest` classes use `@ActiveProfiles("test")`: `src/test/resources/application-test.yml` runs the context on in-memory H2 with no MySQL, Qdrant or Ollama.
+- `@SpringBootTest` and `@WebMvcTest` classes use `@ActiveProfiles("test")`: `src/test/resources/application-test.yml` runs the context on in-memory H2 with no MySQL, Qdrant or Ollama. Every non-live `@SpringBootTest` also carries `support/OfflineAiStack`, which mocks the beans that call Ollama or Qdrant (startup probes included); stub those mocks in the test when a request reaches them.
 - Tests that need the real stack are tagged `@Tag("live")` and gated with `@EnabledIfEnvironmentVariable(named = "LOCALMIND_LIVE_TESTS", matches = "true")`.
 - Web tests use `MockMvc` with `SecurityMockMvcRequestPostProcessors.jwt()`.
+- Every test class has one class-level Javadoc (its only comment); the first sentence names what is tested and the behaviours covered:
+
+  | Kind | First sentence |
+  | --- | --- |
+  | Unit test | `Unit tests for {@link X}: <behaviours covered>.` |
+  | Controller test with `MockMvc` | `MockMvc tests for {@link XController}: <behaviours covered>.` |
+  | Cross-feature or context test | `Integration tests for <what>: <behaviours covered>.` |
+  | `@Tag("live")` test | `Live tests (tag {@code live}) for <what>: <behaviours covered>.` |
+  | Helper, test double or factory | `Test support: <noun phrase>.` |
 - Every behaviour change ships with a test; `./mvnw verify` (tests + Spotless check) must pass before committing, with no infrastructure running.
 
 ### 8. Documentation
