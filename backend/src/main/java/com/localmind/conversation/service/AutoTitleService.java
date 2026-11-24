@@ -13,7 +13,10 @@ import org.springframework.ai.ollama.api.OllamaChatOptions;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
-/** Replaces the placeholder title of a new conversation with a short title generated from the first prompt. */
+/**
+ * Replaces the placeholder title of a new conversation with a short title generated from the first prompt. Runs
+ * asynchronously and writes through a conditional update, so a title the user set in the meantime is never overwritten.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -31,10 +34,6 @@ public class AutoTitleService {
     private final ConversationRepository conversationRepository;
     private final LlmProperties llmProperties;
 
-    /**
-     * Titles the conversation from {@code prompt}, the user message of a completed turn. Runs after every completed
-     * turn but only acts while the title is still the placeholder, so in practice the first answered prompt names it.
-     */
     @Async
     public void generateTitleAsync(String conversationId, String prompt, String modelName) {
         if (conversationId == null || prompt == null || prompt.isBlank()) {
@@ -55,7 +54,6 @@ public class AutoTitleService {
             if (title.isBlank()) {
                 return;
             }
-            // Conditional update: a title the user set while the model was thinking is never overwritten.
             Instant now = Instant.now();
             int updated = conversationRepository.replacePlaceholderTitle(conversation.getId(), title,
                     Conversation.DEFAULT_TITLE, now);
@@ -71,7 +69,6 @@ public class AutoTitleService {
         if (rawTitle == null || rawTitle.isBlank()) {
             return "";
         }
-        // Apostrophes inside words stay ("Don't"); quotes wrapping the whole title are removed.
         String title = ThinkTags.strip(rawTitle).replaceAll("[\"\n\r#*`_]", "").trim()
                 .replaceAll("^['\u2018\u2019]+|['\u2018\u2019]+$", "").trim();
         if (title.toLowerCase(Locale.ROOT).startsWith(TITLE_PREFIX)) {

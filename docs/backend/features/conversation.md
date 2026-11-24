@@ -26,12 +26,12 @@ history and summary enter the prompt.
 | --- | --- | --- |
 | [`ConversationController`](../../../backend/src/main/java/com/localmind/conversation/controller/ConversationController.java) | controller | `/api/conversations` endpoints |
 | [`ConversationService`](../../../backend/src/main/java/com/localmind/conversation/service/ConversationService.java) | service | CRUD, message listing, delete cascade |
-| [`OwnershipGuard`](../../../backend/src/main/java/com/localmind/conversation/service/OwnershipGuard.java) | service (`@Component`) | Throws `AccessDeniedException` unless the conversation belongs to the user |
+| [`OwnershipGuard`](../../../backend/src/main/java/com/localmind/conversation/service/OwnershipGuard.java) | service (`@Component`) | Throws `AccessDeniedException` unless the conversation belongs to the user; can also return it (`requireOwnedConversation`) or write-lock it (`lockOwnedConversation`) |
 | [`AutoTitleService`](../../../backend/src/main/java/com/localmind/conversation/service/AutoTitleService.java) | service | `@Async` title generation from a prompt |
 | [`ConversationSummaryService`](../../../backend/src/main/java/com/localmind/conversation/service/ConversationSummaryService.java) | service | `@Async` rolling summary of dropped history turns |
 | [`ThinkTags`](../../../backend/src/main/java/com/localmind/conversation/service/ThinkTags.java) | service (package-private helper) | Removes `<think>` blocks (complete and unbalanced) and trims |
-| [`ConversationRepository`](../../../backend/src/main/java/com/localmind/conversation/repository/ConversationRepository.java) | repository | Conversations; targeted `UPDATE` queries |
-| [`ChatMessageRepository`](../../../backend/src/main/java/com/localmind/conversation/repository/ChatMessageRepository.java) | repository | Messages ordered by `createdAt`; bulk delete |
+| [`ConversationRepository`](../../../backend/src/main/java/com/localmind/conversation/repository/ConversationRepository.java) | repository | Conversations; owner-scoped lookups (plain and `PESSIMISTIC_WRITE`); targeted `UPDATE` queries |
+| [`ChatMessageRepository`](../../../backend/src/main/java/com/localmind/conversation/repository/ChatMessageRepository.java) | repository | Messages ordered by `createdAt`; `@Transactional @Modifying` bulk delete |
 | [`Conversation`](../../../backend/src/main/java/com/localmind/conversation/entity/Conversation.java) | entity | Table `conversations` |
 | [`ChatMessage`](../../../backend/src/main/java/com/localmind/conversation/entity/ChatMessage.java) | entity | Table `messages` |
 | [`CreateConversationRequest`](../../../backend/src/main/java/com/localmind/conversation/dto/CreateConversationRequest.java) | dto | `POST` body |
@@ -59,10 +59,10 @@ Endpoint notes:
   does not depend on `ModelCatalogService`.
 - **GET list**: only the caller's conversations (`findByUserIdOrderByUpdatedAtDesc`). Pinned conversations are not
   sorted first by the server. No pagination or limit.
-- **PATCH**: each field is optional. `title` non-null: blank → 400, otherwise trimmed and set. `pinned` non-null: set.
+- **PATCH**: the conversation is loaded by `OwnershipGuard#requireOwnedConversation` (one owner-scoped query). Each field is optional. `title` non-null: blank → 400, otherwise trimmed and set. `pinned` non-null: set.
   `modelName` non-null and non-blank: trimmed and set; blank is ignored. Saved with `saveAndFlush`, so `@PreUpdate`
   bumps `updatedAt` and the response carries the new value.
-- **Ownership**: an unknown id and another user's id both return `403` (the guard runs before any lookup), never `404`.
+- **Ownership**: an unknown id and another user's id both return `403` (the guard's owner-scoped query finds nothing in both cases), never `404`.
 - **GET messages**: the full history, no pagination or cursor; ties on equal `createdAt` have no secondary sort key.
 - Validation errors (400) carry `message` = `"<field>: <annotation message>"`, joined with `"; "` for several fields.
 
@@ -159,11 +159,16 @@ Messages are written by the `chat` feature (`ChatOrchestratorService`); this fea
 
 ## Business rules
 
-1. **Ownership**: `OwnershipGuard.validateConversationOwnership(conversationId, userId)` throws `AccessDeniedException`
-   if either argument is `null` or `existsByIdAndUserId` is false. Called by `updateConversation`,
-   `deleteConversation`, `getConversationMessages`, `ChatOrchestratorService.streamChat` and every
-   conversation-scoped `AttachmentService` method. `createConversation` and `listConversations` are scoped by
-   `userId` directly.
+1. **Ownership**: `OwnershipGuard` throws `AccessDeniedException("Access denied: Conversation does not belong to user")`
+   if either argument is `null` or the owner-scoped query finds nothing. Three variants:
+   - `validateConversationOwnership(conversationId, userId)` (`existsByIdAndUserId`): `getConversationMessages`,
+     `ChatOrchestratorService.streamChat`, attachment list and download;
+   - `requireOwnedConversation(conversationId, userId)` (`findByIdAndUserId`) returns the conversation from the same
+     query: `updateConversation`;
+   - `lockOwnedConversation(conversationId, userId)` (`findLockedByIdAndUserId`, `PESSIMISTIC_WRITE`, held until the
+     transaction ends): `deleteConversation` and attachment upload, so the two never interleave (rule 6).
+
+   `createConversation` and `listConversations` are scoped by `userId` directly.
 2. **Create defaults**: blank/absent title → `"New Chat"`; blank/absent model → `localmind.llm.default-model`.
 3. **Update**: blank `title` → `BadRequestException`; blank `modelName` ignored; `pinned` only changed when sent.
 4. **Ordering**: conversations by `updatedAt` desc; messages by `createdAt` asc (both the HTTP listing and the chat
@@ -172,14 +177,17 @@ Messages are written by the `chat` feature (`ChatOrchestratorService`); this fea
    (`replacePlaceholderTitle`). It does not change on a summary update, on a partial assistant message saved after a
    stream error/disconnect, or on attachment changes.
 6. **Delete cascade** (one `@Transactional` method, in this order):
-   1. `AttachmentService.deleteConversationAttachments(conversationId)`: loads the attachments, bulk-deletes the rows,
+   1. `OwnershipGuard.lockOwnedConversation` write-locks the conversation row. A concurrent upload holds the same lock
+      until it commits, so its attachment is visible to the next step; an upload that arrives later waits and then
+      fails with `403`, because the row is gone.
+   2. `AttachmentService.deleteConversationAttachments(conversationId)`: loads the attachments, bulk-deletes the rows,
       and registers an after-commit hook that deletes each stored file and the conversation's document chunks in
       Qdrant (once per distinct attachment owner).
-   2. `ChatMessageRepository.deleteByConversationId` (JPQL bulk `DELETE`).
-   3. `ConversationRepository.deleteById`.
+   3. `ChatMessageRepository.deleteByConversationId` (`@Transactional @Modifying` JPQL bulk `DELETE`).
+   4. `ConversationRepository.delete(conversation)` with the entity loaded in step 1.
 
    Long-term memories (`memory` feature) are user-scoped and are not deleted.
-7. **Auto-title trigger**: `ChatOrchestratorService` calls `generateTitleAsync(conversationId, request.message(), model)`
+7. **Auto-title trigger**: `ChatOrchestratorService` calls `generateTitleAsync(conversationId, trimmed message, model)`
    (parameters `conversationId`, `prompt`, `modelName`) after every successfully completed and persisted turn (after
    `touch`), not after errors or client disconnects. `prompt` is the user message of that turn; since the job only acts
    while the title is still the placeholder, in practice the first answered prompt whose titling succeeds names the
@@ -242,7 +250,7 @@ Messages are written by the `chat` feature (`ChatOrchestratorService`); this fea
 | `ConversationRepository.touch(id, now)` | `UPDATE ... SET updatedAt = :now`; called by `ChatOrchestratorService` at the end of a stream. |
 | `ConversationRepository.replacePlaceholderTitle(id, title, placeholder, now)` | `UPDATE ... SET title, updatedAt WHERE id = :id AND (title IS NULL OR TRIM(title) = '' OR LOWER(title) = LOWER(:placeholder))`; returns rows updated. |
 | `ConversationRepository.updateSummary(id, summary, through)` | `UPDATE ... SET summary, summarizedThrough WHERE id = :id AND (summarizedThrough IS NULL OR summarizedThrough < :through)`; returns rows updated (`int`), does not touch `updatedAt`. |
-| `ChatMessageRepository.deleteByConversationId` | JPQL bulk `DELETE`. |
+| `ChatMessageRepository.deleteByConversationId` | `@Transactional @Modifying` JPQL bulk `DELETE` (joins the delete transaction). |
 
 The three `ConversationRepository` updates are `@Transactional @Modifying`, so they work from threads without a
 surrounding transaction. JPQL updates bypass `@PreUpdate`, which is why `now` is passed explicitly. Both background
@@ -263,9 +271,8 @@ This feature owns no `*Properties` record. It reads `LlmProperties` (owned by `l
 
 | Situation | Exception | HTTP status | Client message |
 | --- | --- | --- | --- |
-| Conversation missing or owned by another user (PATCH, DELETE, GET messages, chat, attachments) | `AccessDeniedException` (`"Access denied: Conversation does not belong to user"`, logged only) | 403 | `You do not have access to this resource` |
+| Conversation missing or owned by another user (PATCH, DELETE, GET messages, chat, attachments; also an upload that waited for a concurrent delete) | `AccessDeniedException` (`"Access denied: Conversation does not belong to user"`, logged only) | 403 | `You do not have access to this resource` |
 | PATCH with blank `title` | `BadRequestException` | 400 | `Title must not be blank` |
-| Conversation vanished between guard and load (PATCH) | `ResourceNotFoundException` | 404 | `Conversation not found` |
 | `title` > 255 characters (POST/PATCH) | `MethodArgumentNotValidException` | 400 | `title: Title cannot exceed 255 characters` |
 | `modelName` > 100 characters (POST/PATCH) | `MethodArgumentNotValidException` | 400 | `modelName: Model name cannot exceed 100 characters` |
 | Missing/invalid JWT | security filter chain | 401 | written by `ProblemDetailSecurityHandler` |
@@ -279,19 +286,21 @@ This feature owns no `*Properties` record. It reads `LlmProperties` (owned by `l
 | Calls | `llm` | `LlmProperties.resolveModel` (create, titling, summary); no dependency on `ModelCatalogService` |
 | Calls | Spring AI | `ChatModel` (Ollama) for titles and summaries |
 | Called by | `chat` | `ChatOrchestratorService`: `OwnershipGuard`, `ConversationRepository.findById`/`touch`, `ChatMessageRepository.save`, `AutoTitleService.generateTitleAsync`. `HistoryAdvisor`: `ChatMessageRepository.findByConversationIdOrderByCreatedAtAsc` / `findByConversationIdAndIdNotOrderByCreatedAtAsc`, `ConversationRepository.findById` (summary), `ConversationSummaryService.summarizeDroppedTurnsAsync` |
-| Called by | `attachment` | `OwnershipGuard` on every conversation-scoped attachment operation |
+| Called by | `attachment` | `OwnershipGuard` on every conversation-scoped attachment operation (`lockOwnedConversation` on upload) |
 
 ## Tests
 
 | Test class | What it covers |
 | --- | --- |
-| [`ConversationControllerTest`](../../../backend/src/test/java/com/localmind/conversation/controller/ConversationControllerTest.java) | `@SpringBootTest` + MockMvc on H2: create (201), user-scoped list, PATCH, message order, delete removes conversation and messages, 403 for another user's GET messages/PATCH/DELETE |
+| [`ConversationControllerTest`](../../../backend/src/test/java/com/localmind/conversation/controller/ConversationControllerTest.java) | `@SpringBootTest` + MockMvc on H2: create (201), user-scoped list, PATCH, PATCH with a blank title 400 `Title must not be blank`, message order, delete removes conversation and messages, 403 for another user's GET messages/PATCH/DELETE |
+| [`ConversationServiceTest`](../../../backend/src/test/java/com/localmind/conversation/service/ConversationServiceTest.java) | Unit test with mocks and a real `AttachmentService`: create trims title/model and applies defaults; rename + pin through `requireOwnedConversation`; partial update keeps unsent fields, ignores a blank model; blank title 400 without saving; delete locks first, then deletes attachment rows, stored files, chunks, messages and the conversation in order; a denied delete deletes nothing; messages require ownership |
+| [`OwnershipGuardTest`](../../../backend/src/test/java/com/localmind/conversation/service/OwnershipGuardTest.java) | All three variants: owner passes / gets the conversation; another user, a missing conversation and `null` ids are denied with the guard's message; `lockOwnedConversation` uses the locking lookup |
 | [`AutoTitleServiceTest`](../../../backend/src/test/java/com/localmind/conversation/service/AutoTitleServiceTest.java) | Quote and `Title:` stripping, `<think>` stripping, no update when the title is customised; `cleanTitle` keeps apostrophes inside words and drops wrapping straight, double and curly quotes and Markdown bold |
 | [`ConversationSummaryServiceTest`](../../../backend/src/test/java/com/localmind/conversation/service/ConversationSummaryServiceTest.java) | `updateSummary` with the newest turn's `createdAt`; turns at/before the watermark skip the model call; no `updateSummary` when the last turn has no `createdAt` |
 | [`ThinkTagsTest`](../../../backend/src/test/java/com/localmind/conversation/service/ThinkTagsTest.java) | Complete blocks (one or several), reasoning before a lone `</think>`, text after an unclosed `<think>`, a reply that is only an unclosed block, plain text unchanged |
 | [`RepositoryPersistenceTests`](../../../backend/src/test/java/com/localmind/integration/RepositoryPersistenceTests.java) | Conversation/message persistence, enum mapping, JSON `tool_calls`; `updateSummary` stores a newer summary (1 row) and refuses an older one (0 rows, summary and watermark unchanged) |
-| [`HistoryAdvisorTest`](../../../backend/src/test/java/com/localmind/chat/prompt/HistoryAdvisorTest.java) | Summary injection and dropped turns sent to `ConversationSummaryService` (chat side) |
+| [`HistoryAdvisorTest`](../../../backend/src/test/java/com/localmind/chat/prompt/advisor/HistoryAdvisorTest.java) | Summary injection and dropped turns sent to `ConversationSummaryService` (chat side) |
 | [`ChatOrchestratorServiceTest`](../../../backend/src/test/java/com/localmind/chat/service/ChatOrchestratorServiceTest.java) | `touch` and auto-title trigger at the end of a stream (chat side) |
 
-Not covered: `ConversationService` unit tests, the attachment/file/vector part of the delete cascade, `PATCH` with a
-blank title, `replacePlaceholderTitle`/`touch` queries against a database.
+Not covered: `replacePlaceholderTitle`/`touch` queries against a database; the row lock itself under real concurrency
+(only that the locking lookup is used).

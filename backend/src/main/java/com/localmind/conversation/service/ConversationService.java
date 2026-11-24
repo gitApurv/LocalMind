@@ -2,7 +2,6 @@ package com.localmind.conversation.service;
 
 import com.localmind.attachment.service.AttachmentService;
 import com.localmind.common.exception.BadRequestException;
-import com.localmind.common.exception.ResourceNotFoundException;
 import com.localmind.conversation.dto.ConversationResponse;
 import com.localmind.conversation.dto.CreateConversationRequest;
 import com.localmind.conversation.dto.MessageResponse;
@@ -16,6 +15,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Creates, lists, updates and deletes a user's conversations and reads their message history, checking ownership with
+ * {@link OwnershipGuard}. Deleting a conversation also deletes its messages and attachments.
+ */
 @Service
 @RequiredArgsConstructor
 public class ConversationService {
@@ -47,9 +50,7 @@ public class ConversationService {
     @Transactional
     public ConversationResponse updateConversation(String conversationId, String userId,
             UpdateConversationRequest request) {
-        ownershipGuard.validateConversationOwnership(conversationId, userId);
-        Conversation conversation = conversationRepository.findById(conversationId)
-                .orElseThrow(() -> new ResourceNotFoundException("Conversation not found"));
+        Conversation conversation = ownershipGuard.requireOwnedConversation(conversationId, userId);
 
         if (request.title() != null) {
             if (request.title().isBlank()) {
@@ -69,10 +70,10 @@ public class ConversationService {
 
     @Transactional
     public void deleteConversation(String conversationId, String userId) {
-        ownershipGuard.validateConversationOwnership(conversationId, userId);
+        Conversation conversation = ownershipGuard.lockOwnedConversation(conversationId, userId);
         attachmentService.deleteConversationAttachments(conversationId);
         chatMessageRepository.deleteByConversationId(conversationId);
-        conversationRepository.deleteById(conversationId);
+        conversationRepository.delete(conversation);
     }
 
     @Transactional(readOnly = true)

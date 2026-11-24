@@ -9,7 +9,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.localmind.common.ai.VectorFilters;
-import com.localmind.common.exception.ResourceNotFoundException;
 import com.localmind.memory.dto.UpdateMemoryRequest;
 import com.localmind.memory.entity.UserMemory;
 import com.localmind.memory.repository.UserMemoryRepository;
@@ -18,7 +17,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
+import org.springframework.security.access.AccessDeniedException;
 
+/**
+ * Unit tests for {@link MemoryService}: pinning, deleting the row together with its vector, and denying another user's
+ * or an unknown memory so ids cannot be probed.
+ */
 class MemoryServiceTest {
 
     private final UserMemoryRepository repository = mock(UserMemoryRepository.class);
@@ -30,7 +34,7 @@ class MemoryServiceTest {
     @Test
     @DisplayName("updateMemory() should change only the pinned flag of the caller's memory")
     void pinsOwnMemory() {
-        when(repository.findByIdAndUserId("m1", "u1")).thenReturn(Optional.of(memory));
+        when(repository.findById("m1")).thenReturn(Optional.of(memory));
         when(repository.save(memory)).thenReturn(memory);
 
         assertEquals(true, service.updateMemory("m1", "u1", new UpdateMemoryRequest(true)).pinned());
@@ -39,25 +43,37 @@ class MemoryServiceTest {
     @Test
     @DisplayName("deleteMemory() should delete the row and the memory's own vector")
     void deletesRowAndVector() {
-        when(repository.findByIdAndUserId("m1", "u1")).thenReturn(Optional.of(memory));
+        when(repository.findById("m1")).thenReturn(Optional.of(memory));
 
         service.deleteMemory("m1", "u1");
 
         verify(repository).delete(memory);
-        // Without an active transaction the after-commit hook runs immediately.
         verify(vectorStore).delete(any(Filter.Expression.class));
         assertEquals(VectorFilters.userMemory("u1", "m1").toString(), capturedFilter().toString());
     }
 
     @Test
-    @DisplayName("Another user's memory should be reported as not found and left untouched")
-    void otherUsersMemoryIsNotFound() {
-        when(repository.findByIdAndUserId("m1", "intruder")).thenReturn(Optional.empty());
+    @DisplayName("Another user's memory should be rejected with 403 and left untouched")
+    void otherUsersMemoryIsForbidden() {
+        when(repository.findById("m1")).thenReturn(Optional.of(memory));
 
-        assertThrows(ResourceNotFoundException.class, () -> service.deleteMemory("m1", "intruder"));
+        assertThrows(AccessDeniedException.class, () -> service.deleteMemory("m1", "intruder"));
+        assertThrows(AccessDeniedException.class,
+                () -> service.updateMemory("m1", "intruder", new UpdateMemoryRequest(true)));
 
         verify(repository, never()).delete(any());
+        verify(repository, never()).save(any());
         verify(vectorStore, never()).delete(any(Filter.Expression.class));
+    }
+
+    @Test
+    @DisplayName("An unknown memory id is denied like another user's memory, so ids cannot be probed")
+    void unknownMemoryIsDenied() {
+        when(repository.findById("missing")).thenReturn(Optional.empty());
+
+        assertThrows(AccessDeniedException.class, () -> service.deleteMemory("missing", "u1"));
+
+        verify(repository, never()).delete(any());
     }
 
     private Filter.Expression capturedFilter() {

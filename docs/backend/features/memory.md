@@ -23,8 +23,8 @@ non-pinned ones are retrieved semantically by the prompt pipeline (see
 | Class | Layer | Role |
 | --- | --- | --- |
 | [`MemoryController`](../../../backend/src/main/java/com/localmind/memory/controller/MemoryController.java) | controller | `/api/memories` list, pin/unpin, delete |
-| [`MemoryService`](../../../backend/src/main/java/com/localmind/memory/service/MemoryService.java) | service | User-scoped lookup, pin update, delete + after-commit vector delete |
-| [`UserMemoryRepository`](../../../backend/src/main/java/com/localmind/memory/repository/UserMemoryRepository.java) | repository | Derived queries scoped by `userId` |
+| [`MemoryService`](../../../backend/src/main/java/com/localmind/memory/service/MemoryService.java) | service | Lookup with ownership check (403 for unknown or another user's), pin update, delete + after-commit vector delete |
+| [`UserMemoryRepository`](../../../backend/src/main/java/com/localmind/memory/repository/UserMemoryRepository.java) | repository | Derived queries scoped by `userId`; `findById` for the vault endpoints |
 | [`UserMemory`](../../../backend/src/main/java/com/localmind/memory/entity/UserMemory.java) | entity | `user_memories` row |
 | [`MemoryResponse`](../../../backend/src/main/java/com/localmind/memory/dto/MemoryResponse.java) | dto | Response record with `from(UserMemory)` |
 | [`UpdateMemoryRequest`](../../../backend/src/main/java/com/localmind/memory/dto/UpdateMemoryRequest.java) | dto | PATCH body (`pinned`) |
@@ -39,8 +39,9 @@ All endpoints require a Bearer access token; the caller is read with `@CurrentUs
 | `PATCH` | `/api/memories/{id}` | `UpdateMemoryRequest` | `MemoryResponse` | `200` | `pinned` is required; only the pin flag can be changed |
 | `DELETE` | `/api/memories/{id}` | none | empty | `204` | Deletes the row; embedding removed after commit |
 
-- Ownership: the memory is loaded with `findByIdAndUserId(id, userId)`, so another user's memory (or an unknown id)
-  is reported as `404 Memory not found`, never `403`.
+- Ownership: the memory is loaded with `findById(id)`. An unknown id and another user's memory are both `403`
+  (`AccessDeniedException`, `"Access denied: Memory does not belong to user"`, logged only), like conversations, so
+  memory ids cannot be probed.
 - The memory text (`memoryFact`) cannot be edited through the API.
 
 `UpdateMemoryRequest`:
@@ -72,6 +73,9 @@ All endpoints require a Bearer access token; the caller is read with `@CurrentUs
 | `pinned` | `Boolean` | nullable | `false` (`@Builder.Default`) |
 | `created_at` | `Instant` | `updatable = false` | `@PrePersist`: `Instant.now()` if null |
 
+- `pinned` stays a nullable `Boolean` (unlike `conversations.pinned`): the column is not declared `NOT NULL`, and
+  `ddl-auto: update` never tightens an existing column, so databases created earlier may hold `NULL`, which a primitive
+  `boolean` could not load. New rows always get `false` from `@Builder.Default`; `MemoryResponse` maps `NULL` to `false`.
 - No JPA relations: `user_id` is a plain column (no foreign key to `users`).
 - Index `idx_user_memories_user_created` (`user_id, created_at`) serves the vault list and the pinned-memory lookup.
 
@@ -89,12 +93,12 @@ All endpoints require a Bearer access token; the caller is read with `@CurrentUs
 | `findByUserIdOrderByCreatedAtDesc(userId)` | `MemoryService.listMemories`, `UserMemoryTools.recallUserMemories` (fallback, first 20 used) |
 | `existsByUserIdAndMemoryFact(userId, memoryFact)` | `UserMemoryTools.saveUserMemory` (exact-duplicate check) |
 | `findByUserIdAndPinnedTrue(userId)` | `PromptStructureAdvisor` (pinned block), `MemoryRetrievalAdvisor` (dedup of pinned facts) |
-| `findByIdAndUserId(id, userId)` | `MemoryService` (ownership-scoped lookup) |
+| `findById(id)` (inherited) | `MemoryService` (lookup, then ownership check against `userId`) |
 
 ## Business rules
 
-1. Every read and write is scoped to the caller's `userId`; a memory of another user is indistinguishable from a
-   missing one (`404`).
+1. Every read and write is scoped to the caller's `userId`: the list is filtered by `userId`; `PATCH`/`DELETE` load by
+   id and reject an unknown id or another user's memory with `403`.
 2. List order is `createdAt` descending.
 3. `PATCH` sets `pinned` to the request value and saves; nothing else changes.
 4. `DELETE` removes the row in the request transaction, then removes the embedding with filter
@@ -103,8 +107,8 @@ All endpoints require a Bearer access token; the caller is read with `@CurrentUs
    characters are rejected with a tool error string; if the user already has a memory with exactly the same text
    (`existsByUserIdAndMemoryFact` on the trimmed fact, compared by the database) nothing is stored and the tool returns
    `Memory already saved: <fact>`. Otherwise the row is saved with a fresh UUID, then embedded into Qdrant with metadata
-   `userId`, `type = USER_MEMORY`, `memoryId`. If `vectorStore.add` throws, the row is deleted again
-   (`deleteById`) so the database and Qdrant stay consistent.
+   `userId`, `type = USER_MEMORY`, `memoryId`. Row and embedding are written in one transaction (`UserMemoryWriteService`): if `vectorStore.add` throws the row
+   rolls back, and a rollback after the add deletes the point again via `TransactionHooks`.
 6. Pinned memories are always added to the system prompt; non-pinned ones only when semantically relevant
    (see [PROMPT_GENERATION_PROCESS.md](../../PROMPT_GENERATION_PROCESS.md)).
 
@@ -114,7 +118,7 @@ All endpoints require a Bearer access token; the caller is read with `@CurrentUs
 | --- | --- |
 | `MemoryService.deleteMemory` commits | `TransactionHooks.afterCommit`: `vectorStore.delete(VectorFilters.userMemory(userId, memoryId))`, i.e. `userId == u AND memoryId == m AND type == USER_MEMORY`. A failure is logged by `TransactionHooks`, never thrown; the row is already gone. |
 | `MemoryService.deleteMemory` rolls back | Nothing (no external effect has happened yet). |
-| Tool `saveUserMemory` (in `tools`) | `vectorStore.add` of one `Document(fact, {userId, type: USER_MEMORY, memoryId})`; compensating `deleteById` on failure. |
+| Tool `saveUserMemory` (in `tools`) | `vectorStore.add` of one `Document(fact, {userId, type: USER_MEMORY, memoryId})`; in the same transaction as the row, point deleted again on rollback. |
 | Tool `recallUserMemories` / `MemoryRetrievalAdvisor` (other features) | Qdrant similarity search with `VectorFilters.userMemories(userId)` (`userId == u AND type == USER_MEMORY`). |
 
 No `@Async` methods and no `@Modifying` queries in this feature.
@@ -128,7 +132,7 @@ None. The feature owns no `*Properties` record. Memory retrieval in the prompt i
 
 | Situation | Exception | HTTP status | Client message |
 | --- | --- | --- | --- |
-| Memory id unknown or owned by another user (PATCH, DELETE) | `ResourceNotFoundException` | 404 | `Memory not found` |
+| Memory id unknown or another user's (PATCH, DELETE) | `AccessDeniedException` (`"Access denied: Memory does not belong to user"`, logged only) | 403 | `You do not have access to this resource` |
 | `pinned` missing or `null` in PATCH body | `MethodArgumentNotValidException` (MVC) | 400 | `pinned: Pinned flag is required` |
 | Malformed JSON body | handled by `ResponseEntityExceptionHandler` | 400 | standard ProblemDetail |
 | No / invalid Bearer token | security filter chain | 401 | written by `ProblemDetailSecurityHandler` |
@@ -137,15 +141,15 @@ None. The feature owns no `*Properties` record. Memory retrieval in the prompt i
 
 | Direction | Feature | Usage |
 | --- | --- | --- |
-| uses | `common` | `TransactionHooks`, `VectorFilters`, `ResourceNotFoundException`, `@CurrentUserId`, `VectorStore` bean |
-| used by | `tools` | `UserMemoryTools` checks for duplicates (`existsByUserIdAndMemoryFact`), saves memories (`save`, `deleteById`) and lists them (`findByUserIdOrderByCreatedAtDesc`) |
+| uses | `common` | `TransactionHooks`, `VectorFilters`, `ResourceNotFoundException`, `@CurrentUserId`, `VectorStore` bean; Spring Security `AccessDeniedException` |
+| used by | `tools` | `UserMemoryTools` checks for duplicates (`existsByUserIdAndMemoryFact`), saves memories (`save`, through `UserMemoryWriteService`) and lists them (`findByUserIdOrderByCreatedAtDesc`) |
 | used by | `chat` | `PromptStructureAdvisor` and `MemoryRetrievalAdvisor` read `findByUserIdAndPinnedTrue` |
 
 ## Tests
 
 | Test class | What it covers |
 | --- | --- |
-| [`MemoryControllerTest`](../../../backend/src/test/java/com/localmind/memory/controller/MemoryControllerTest.java) | `@SpringBootTest` on H2: list returns only the caller's memories, pin via PATCH, DELETE returns 204, other user's memory is 404 `Memory not found` |
-| [`MemoryServiceTest`](../../../backend/src/test/java/com/localmind/memory/service/MemoryServiceTest.java) | Unit test with mocks: `updateMemory` pins the caller's memory; `deleteMemory` deletes the row and the vector with `VectorFilters.userMemory(userId, memoryId)` (hook runs immediately without a transaction); another user's memory is `ResourceNotFoundException` and neither row nor vector is deleted |
+| [`MemoryControllerTest`](../../../backend/src/test/java/com/localmind/memory/controller/MemoryControllerTest.java) | `@SpringBootTest` on H2: list returns only the caller's memories, pin via PATCH, DELETE returns 204, other user's memory and an unknown id are both 403 |
+| [`MemoryServiceTest`](../../../backend/src/test/java/com/localmind/memory/service/MemoryServiceTest.java) | Unit test with mocks: `updateMemory` pins the caller's memory; `deleteMemory` deletes the row and the vector with `VectorFilters.userMemory(userId, memoryId)` (hook runs immediately without a transaction); another user's memory is `AccessDeniedException` for PATCH and DELETE and neither row nor vector is changed; an unknown id is `ResourceNotFoundException` |
 | [`UserMemoryToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/UserMemoryToolsTest.java) | Tool save (repository + vector index), missing user / blank / over-long fact errors, exact duplicate not stored, recall via vector search and DB fallback capped to 20 |
-| [`MemoryRetrievalAdvisorTest`](../../../backend/src/test/java/com/localmind/chat/prompt/MemoryRetrievalAdvisorTest.java) | Semantic memory injection into the system prompt |
+| [`MemoryRetrievalAdvisorTest`](../../../backend/src/test/java/com/localmind/chat/prompt/advisor/MemoryRetrievalAdvisorTest.java) | Semantic memory injection into the system prompt |

@@ -14,9 +14,12 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/**
+ * JPA entity for table {@code user_memories}: one long-term fact the model saved about a user. Each row has an
+ * embedding in the vector store under the same id; pinned memories are always added to the system prompt.
+ */
 @Entity
 @Table(name = "user_memories", indexes = {
-        // Memory vault (newest first) and the pinned-memory lookup on every chat turn.
         @Index(name = "idx_user_memories_user_created", columnList = "user_id, created_at")})
 @Getter
 @Setter

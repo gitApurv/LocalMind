@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.localmind.memory.entity.UserMemory;
 import com.localmind.memory.repository.UserMemoryRepository;
+import com.localmind.support.OfflineAiStack;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,7 +24,12 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+/**
+ * MockMvc tests for {@link MemoryController}: listing only the caller's memories, pin and delete, and 403 for another
+ * user's or an unknown memory. Boots the full context on the test profile (H2).
+ */
 @SpringBootTest
+@OfflineAiStack
 @ActiveProfiles("test")
 @AutoConfigureMockMvc
 class MemoryControllerTest {
@@ -74,12 +80,19 @@ class MemoryControllerTest {
     }
 
     @Test
-    @DisplayName("Another user's memory should be reported as not found")
-    void otherUsersMemoryIsNotFound() throws Exception {
+    @DisplayName("Another user's memory should be rejected with 403")
+    void otherUsersMemoryIsForbidden() throws Exception {
         mockMvc.perform(delete("/api/memories/" + memory.getId()).with(user("intruder")))
-                .andExpect(status().isNotFound()).andExpect(jsonPath("$.message", is("Memory not found")));
+                .andExpect(status().isForbidden());
 
         assertThat(userMemoryRepository.findById(memory.getId())).isPresent();
+    }
+
+    @Test
+    @DisplayName("An unknown memory id returns 403 like another user's memory")
+    void unknownMemoryIsForbidden() throws Exception {
+        mockMvc.perform(delete("/api/memories/does-not-exist").with(user(USER_ID))).andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message", is("You do not have access to this resource")));
     }
 
     private static RequestPostProcessor user(String userId) {

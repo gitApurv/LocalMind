@@ -12,6 +12,7 @@ import com.localmind.conversation.entity.ChatMessage;
 import com.localmind.conversation.entity.Conversation;
 import com.localmind.conversation.repository.ChatMessageRepository;
 import com.localmind.conversation.repository.ConversationRepository;
+import com.localmind.support.OfflineAiStack;
 import com.localmind.user.entity.User;
 import com.localmind.user.repository.UserRepository;
 import java.time.Instant;
@@ -27,7 +28,12 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * MockMvc tests for {@link ConversationController}: create, list, rename and pin, blank-title 400s, message history,
+ * cascading delete and the cross-user ownership check. Boots the full context on the test profile (H2).
+ */
 @SpringBootTest
+@OfflineAiStack
 @ActiveProfiles("test")
 @AutoConfigureMockMvc
 class ConversationControllerTest {
@@ -113,6 +119,21 @@ class ConversationControllerTest {
         Conversation updated = conversationRepository.findById(conv.getId()).orElseThrow();
         assertEquals("New Title", updated.getTitle());
         assertTrue(updated.isPinned());
+    }
+
+    @Test
+    @DisplayName("PATCH /api/conversations/{id} with a blank title should return 400 and keep the title")
+    void updateConversationBlankTitle() throws Exception {
+        Conversation conv = conversationRepository
+                .save(Conversation.builder().userId(userA.getId()).title("Keep me").build());
+
+        mockMvc.perform(patch("/api/conversations/" + conv.getId())
+                .with(jwt().jwt(jwt -> jwt.subject(userA.getId()).claim("email", userA.getEmail())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(new UpdateConversationRequest("   ", null, null))))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.message", is("Title must not be blank")));
+
+        assertEquals("Keep me", conversationRepository.findById(conv.getId()).orElseThrow().getTitle());
     }
 
     @Test

@@ -1,7 +1,6 @@
 package com.localmind.memory.service;
 
 import com.localmind.common.ai.VectorFilters;
-import com.localmind.common.exception.ResourceNotFoundException;
 import com.localmind.common.transaction.TransactionHooks;
 import com.localmind.memory.dto.MemoryResponse;
 import com.localmind.memory.dto.UpdateMemoryRequest;
@@ -10,13 +9,19 @@ import com.localmind.memory.repository.UserMemoryRepository;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Lets users review, pin and delete the long-term memories the model saved about them. */
+/**
+ * Lists, pins and deletes the long-term memories the model saved about a user, so users can review what it remembers.
+ * Deleting a memory also removes its embedding from the vector store once the deletion commits.
+ */
 @Service
 @RequiredArgsConstructor
 public class MemoryService {
+
+    static final String ACCESS_DENIED_MESSAGE = "Access denied: Memory does not belong to user";
 
     private final UserMemoryRepository userMemoryRepository;
     private final VectorStore vectorStore;
@@ -35,7 +40,6 @@ public class MemoryService {
         return MemoryResponse.from(saved);
     }
 
-    /** Removes the memory and, once the deletion commits, its embedding. */
     @Transactional
     public void deleteMemory(String memoryId, String userId) {
         UserMemory memory = findMemory(memoryId, userId);
@@ -44,7 +48,7 @@ public class MemoryService {
     }
 
     private UserMemory findMemory(String memoryId, String userId) {
-        return userMemoryRepository.findByIdAndUserId(memoryId, userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Memory not found"));
+        return userMemoryRepository.findById(memoryId).filter(memory -> memory.getUserId().equals(userId))
+                .orElseThrow(() -> new AccessDeniedException(ACCESS_DENIED_MESSAGE));
     }
 }

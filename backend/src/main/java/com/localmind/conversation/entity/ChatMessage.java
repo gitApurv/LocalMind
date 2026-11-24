@@ -17,11 +17,11 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * A persisted turn of a conversation. Named {@code ChatMessage} to avoid clashing with Spring AI's {@code Message}.
+ * JPA entity for table {@code messages}: one persisted turn (user prompt or assistant reply) of a conversation. Named
+ * {@code ChatMessage} to avoid clashing with Spring AI's {@code Message}.
  */
 @Entity
 @Table(name = "messages", indexes = {
-        // Thread view, prompt history and conversation delete all filter by conversation, oldest first.
         @Index(name = "idx_messages_conversation_created", columnList = "conversation_id, created_at")})
 @Getter
 @Setter

@@ -15,9 +15,14 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/**
+ * JPA entity for table {@code conversations}: one chat thread owned by a user. Besides title, model and pin state, a
+ * row holds the rolling summary of turns trimmed from the prompt and the watermark {@code summarized_through};
+ * background jobs change these through the targeted updates in {@code ConversationRepository}, never by saving the
+ * entity.
+ */
 @Entity
 @Table(name = "conversations", indexes = {
-        // Sidebar list: findByUserIdOrderByUpdatedAtDesc.
         @Index(name = "idx_conversations_user_updated", columnList = "user_id, updated_at")})
 @Getter
 @Setter
@@ -44,7 +49,6 @@ public class Conversation {
     @Column(name = "summary", columnDefinition = "TEXT")
     private String summary;
 
-    /** Creation time of the newest message already folded into {@link #summary}. */
     @Column(name = "summarized_through")
     private Instant summarizedThrough;
 
