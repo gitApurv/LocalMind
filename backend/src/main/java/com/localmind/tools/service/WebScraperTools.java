@@ -6,18 +6,14 @@ import jakarta.annotation.PreDestroy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.Inet4Address;
-import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
 import java.nio.charset.Charset;
-import java.util.Arrays;
 import java.util.Locale;
 import java.util.function.Predicate;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.hc.client5.http.DnsResolver;
-import org.apache.hc.client5.http.SystemDefaultDnsResolver;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.RequestConfig;
@@ -41,10 +37,11 @@ import org.springframework.stereotype.Component;
  * LLM tool {@code readWebPage}: lets the model fetch a web page and read its text, cut to 4,000 characters. Requests to
  * loopback and private networks are blocked (SSRF guard) unless explicitly allowed.
  * <p>
- * The guard lives in the HTTP client's DNS resolver: the addresses it validates are the only ones the connection may
- * use. Checking a host and then letting the HTTP library resolve it again would let a DNS server answer the check with
- * a public address and the connection with a private one (DNS rebinding). Redirects are followed manually, so every hop
- * goes through the same resolver.
+ * The guard lives in the HTTP client's DNS resolver ({@link GuardedDnsResolver}, ranges in
+ * {@link RestrictedAddresses}): the addresses it validates are the only ones the connection may use. Checking a host
+ * and then letting the HTTP library resolve it again would let a DNS server answer the check with a public address and
+ * the connection with a private one (DNS rebinding). Redirects are followed manually, so every hop goes through the
+ * same resolver.
  */
 @Slf4j
 @Component
@@ -61,14 +58,11 @@ public class WebScraperTools {
     private static final String NON_CONTENT_ELEMENTS = "script, style, noscript, nav, footer, header, svg, form";
     private static final String SSRF_BLOCKED = "Error: Access to private or loopback IP addresses is restricted (SSRF protection).";
 
-    private final WebScraperProperties properties;
-    private final Predicate<InetAddress> restrictedAddress;
-    private final HostLookup hostLookup;
     private final CloseableHttpClient httpClient;
 
     @Autowired
     public WebScraperTools(WebScraperProperties properties) {
-        this(properties, WebScraperTools::isRestrictedAddress);
+        this(properties, RestrictedAddresses::isRestricted);
     }
 
     WebScraperTools(WebScraperProperties properties, Predicate<InetAddress> restrictedAddress) {
@@ -76,15 +70,8 @@ public class WebScraperTools {
     }
 
     WebScraperTools(WebScraperProperties properties, Predicate<InetAddress> restrictedAddress, HostLookup hostLookup) {
-        this.properties = properties;
-        this.restrictedAddress = restrictedAddress;
-        this.hostLookup = hostLookup;
-        this.httpClient = buildHttpClient(new GuardedDnsResolver());
-    }
-
-    @FunctionalInterface
-    interface HostLookup {
-        InetAddress[] lookup(String host) throws UnknownHostException;
+        this.httpClient = buildHttpClient(
+                new GuardedDnsResolver(properties.allowPrivateSubnets(), restrictedAddress, hostLookup));
     }
 
     public record WebScrapeRequest(@JsonProperty(value = "url", required = true) String url) {
@@ -195,46 +182,6 @@ public class WebScraperTools {
         return null;
     }
 
-    private final class GuardedDnsResolver implements DnsResolver {
-
-        @Override
-        public InetAddress[] resolve(String host) throws UnknownHostException {
-            if (properties.allowPrivateSubnets()) {
-                return hostLookup.lookup(host);
-            }
-            String lowerHost = host.toLowerCase(Locale.ROOT);
-            if ((lowerHost.equals("localhost") || lowerHost.endsWith(".localhost"))
-                    && restrictedAddress.test(InetAddress.getLoopbackAddress())) {
-                throw blocked(host, InetAddress.getLoopbackAddress());
-            }
-            InetAddress[] addresses = hostLookup.lookup(host);
-            for (InetAddress address : addresses) {
-                if (restrictedAddress.test(address)) {
-                    throw blocked(host, address);
-                }
-            }
-            return addresses;
-        }
-
-        private BlockedHostException blocked(String host, InetAddress address) {
-            log.warn("SSRF blocked attempt to connect to restricted host '{}' resolved to '{}'", host,
-                    address.getHostAddress());
-            return new BlockedHostException(host);
-        }
-
-        @Override
-        public String resolveCanonicalHostname(String host) throws UnknownHostException {
-            return SystemDefaultDnsResolver.INSTANCE.resolveCanonicalHostname(host);
-        }
-    }
-
-    private static final class BlockedHostException extends UnknownHostException {
-
-        BlockedHostException(String host) {
-            super("SSRF guard blocked host '" + host + "'");
-        }
-    }
-
     private static CloseableHttpClient buildHttpClient(DnsResolver dnsResolver) {
         ConnectionConfig connectionConfig = ConnectionConfig.custom().setConnectTimeout(TIMEOUT)
                 .setSocketTimeout(TIMEOUT).build();
@@ -266,70 +213,6 @@ public class WebScraperTools {
 
     private static boolean isRedirect(int status) {
         return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
-    }
-
-    static boolean isRestrictedAddress(InetAddress address) {
-        if (address.isLoopbackAddress() || address.isSiteLocalAddress() || address.isLinkLocalAddress()
-                || address.isAnyLocalAddress() || address.isMulticastAddress()) {
-            return true;
-        }
-        byte[] bytes = address.getAddress();
-        if (address instanceof Inet4Address) {
-            return isRestrictedIpv4(bytes);
-        }
-        return address instanceof Inet6Address && isRestrictedIpv6(bytes);
-    }
-
-    private static boolean isRestrictedIpv4(byte[] bytes) {
-        int first = bytes[0] & 0xFF;
-        int second = bytes[1] & 0xFF;
-        int third = bytes[2] & 0xFF;
-        return first == 0 || (first == 100 && second >= 64 && second <= 127)
-                || (first == 192 && second == 0 && third == 0) || (first == 198 && (second == 18 || second == 19))
-                || first >= 240;
-    }
-
-    private static boolean isRestrictedIpv6(byte[] bytes) {
-        int firstWord = word(bytes, 0);
-        int secondWord = word(bytes, 2);
-        if ((bytes[0] & 0xFE) == 0xFC || (firstWord == 0x2001 && secondWord == 0)) {
-            return true;
-        }
-        if (firstWord == 0x0064 && secondWord == 0xFF9B) {
-            return word(bytes, 4) == 0x0001 || embeddedIpv4IsRestricted(bytes, 12);
-        }
-        if (firstWord == 0x2002) {
-            return embeddedIpv4IsRestricted(bytes, 2);
-        }
-        if (isZero(bytes, 0, 10) && (isIpv4MappedMarker(bytes) || isZero(bytes, 10, 12))) {
-            return embeddedIpv4IsRestricted(bytes, 12);
-        }
-        return false;
-    }
-
-    private static boolean embeddedIpv4IsRestricted(byte[] bytes, int offset) {
-        try {
-            return isRestrictedAddress(InetAddress.getByAddress(Arrays.copyOfRange(bytes, offset, offset + 4)));
-        } catch (UnknownHostException e) {
-            return true;
-        }
-    }
-
-    private static int word(byte[] bytes, int offset) {
-        return ((bytes[offset] & 0xFF) << 8) | (bytes[offset + 1] & 0xFF);
-    }
-
-    private static boolean isZero(byte[] bytes, int from, int to) {
-        for (int i = from; i < to; i++) {
-            if (bytes[i] != 0) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean isIpv4MappedMarker(byte[] bytes) {
-        return (bytes[10] & 0xFF) == 0xFF && (bytes[11] & 0xFF) == 0xFF;
     }
 
     public ToolCallback toolCallback() {

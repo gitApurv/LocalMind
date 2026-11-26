@@ -34,6 +34,10 @@ Not owned here: which tools are offered per turn (`chat.service.ToolSelector`), 
 | [`UserMemoryWriteService`](../../../backend/src/main/java/com/localmind/tools/service/UserMemoryWriteService.java) | service | `@Transactional saveIfAbsent(userId, fact)` behind `saveUserMemory`: duplicate check, row insert and embedding in one transaction. A separate bean so the tool can catch every failure, commit failures included, and the transaction proxy is not bypassed by a self-call. |
 | [`WebSearchTools`](../../../backend/src/main/java/com/localmind/tools/service/WebSearchTools.java) | service | `searchWeb` tool (SearXNG JSON API). |
 | [`WebScraperTools`](../../../backend/src/main/java/com/localmind/tools/service/WebScraperTools.java) | service | `readWebPage` tool (Apache HttpClient 5 with an SSRF-guarded DNS resolver, Jsoup for parsing, manual redirects). |
+| [`GuardedDnsResolver`](../../../backend/src/main/java/com/localmind/tools/service/GuardedDnsResolver.java) | service | Package-private `DnsResolver` of the scraper's HTTP client: looks a host up once and throws `BlockedHostException` if any address is restricted. |
+| [`RestrictedAddresses`](../../../backend/src/main/java/com/localmind/tools/service/RestrictedAddresses.java) | service | Package-private `isRestricted(InetAddress)`: the address ranges the scraper must not reach. |
+| [`HostLookup`](../../../backend/src/main/java/com/localmind/tools/service/HostLookup.java) | service | Package-private functional interface for the resolver's DNS lookup (`InetAddress::getAllByName` in production, fixed answers in tests). |
+| [`BlockedHostException`](../../../backend/src/main/java/com/localmind/tools/service/BlockedHostException.java) | service | Package-private `UnknownHostException` thrown by the resolver; `WebScraperTools` turns it into the fixed SSRF message. |
 | [`DocumentSearchTools`](../../../backend/src/main/java/com/localmind/tools/service/DocumentSearchTools.java) | service | `searchUploadedDocs` tool (Qdrant similarity search). |
 | [`ToolContexts`](../../../backend/src/main/java/com/localmind/tools/service/ToolContexts.java) | service | Package-private helper: reads a non-blank string from a `ToolContext` via `ChatContextKeys.getString`, `null` if absent/blank or the context is `null`. |
 
@@ -201,7 +205,7 @@ flowchart TD
    the same path. Because nothing resolves the host a second time, a DNS server cannot answer the check with a public
    address and the connection with a private one (DNS rebinding). This does not depend on the JVM's DNS cache
    (`networkaddress.cache.ttl`).
-4. **Restricted addresses** (`isRestrictedAddress`):
+4. **Restricted addresses** (`RestrictedAddresses.isRestricted`):
 
    | Range | Rule |
    | --- | --- |
@@ -226,7 +230,7 @@ flowchart TD
 
 5. **`allowPrivateSubnets`.** When `localmind.tools.scraper.allow-private-subnets=true`, the resolver returns the
    looked-up addresses unchecked (scheme and host checks still apply). Intended only for local testing; default `false`.
-6. Package-private constructors accept a custom `Predicate<InetAddress>` and a `HostLookup`, so tests can allow
+6. Package-private `WebScraperTools` constructors accept a custom `Predicate<InetAddress>` and a `HostLookup`, so tests can allow
    loopback while applying the production rule to everything else, and can simulate a rebinding DNS server.
 
 ### `searchUploadedDocs`
@@ -330,6 +334,7 @@ No `ApiException` is thrown; every tool failure is a string returned to the mode
 | [`UserMemoryWriteServiceTest`](../../../backend/src/test/java/com/localmind/tools/service/UserMemoryWriteServiceTest.java) | Row and embedding share the memory id, duplicate skipped without touching the vector store, embedding failure propagates (so the transaction rolls back), rollback after the add deletes the point, commit keeps it. |
 | [`SearxngPropertiesTest`](../../../backend/src/test/java/com/localmind/tools/config/SearxngPropertiesTest.java) | Null/blank base URL → default, trimmed without trailing `/`. |
 | [`WebSearchToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/WebSearchToolsTest.java) | SearXNG request URL and parsing (`MockRestServiceServer`), blank query (no HTTP call), server error reported as the fixed "unavailable" string instead of "no results", trimmed query in the no-results message, callback formatting. |
-| [`WebScraperToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/WebScraperToolsTest.java) | Local `HttpServer`: extraction, truncation, uppercase scheme, bad schemes, connection failure, SSRF ranges, redirect follow, redirect into private network, redirect loop, CGNAT/ULA/mapped ranges, parameterised special-purpose IPv4 ranges (`192.0.0.0/24`, `198.18.0.0/15`, `240.0.0.0/4`, broadcast) and IPv6 forms embedding IPv4 (NAT64, local-use NAT64, 6to4, Teredo, IPv4-compatible, IPv4-mapped; public embedded addresses allowed), a single checked DNS lookup per hop under a rebinding DNS answer, host with any private address blocked, connection through the guarded resolver, non-text content rejected. |
+| [`WebScraperToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/WebScraperToolsTest.java) | Local `HttpServer`: extraction, truncation, uppercase scheme, bad schemes, connection failure, SSRF ranges, redirect follow, redirect into private network, redirect loop, a single checked DNS lookup per hop under a rebinding DNS answer, host with any private address blocked, connection through the guarded resolver, non-text content rejected. |
+| [`RestrictedAddressesTest`](../../../backend/src/test/java/com/localmind/tools/service/RestrictedAddressesTest.java) | CGNAT/ULA/unspecified/multicast/mapped ranges, parameterised special-purpose IPv4 ranges (`192.0.0.0/24`, `198.18.0.0/15`, `240.0.0.0/4`, broadcast) and IPv6 forms embedding IPv4 (NAT64, local-use NAT64, 6to4, Teredo, IPv4-compatible, IPv4-mapped; public embedded addresses allowed). |
 | [`DocumentSearchToolsTest`](../../../backend/src/test/java/com/localmind/tools/service/DocumentSearchToolsTest.java) | Match formatting, empty result, missing context, blank query, callback. |
 | [`ToolSelectorTest`](../../../backend/src/test/java/com/localmind/chat/service/ToolSelectorTest.java) | No tools for unsupported model / tools off; doc search only with READY attachments; scraper only with a URL. |

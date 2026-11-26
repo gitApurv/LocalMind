@@ -3,12 +3,14 @@ package com.localmind.tools.service;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.localmind.tools.config.WebScraperProperties;
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,8 +19,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Unit tests for {@link WebScraperTools}: clean text extraction and truncation, URL scheme checks, connection failures,
- * redirects, non-text content, and the SSRF guard on every hop including restricted ranges and DNS rebinding. Pages are
- * served by a local {@code HttpServer}.
+ * redirects, non-text content, and the SSRF guard on every hop including DNS rebinding. Pages are served by a local
+ * {@code HttpServer}.
  */
 class WebScraperToolsTest {
 
@@ -130,7 +132,7 @@ class WebScraperToolsTest {
     @Test
     @DisplayName("readWebPage() should allow uppercase HTTP/HTTPS schemes")
     void allowUppercaseHttpScheme() {
-        String upperResult = scraperTools.readWebPage(serverBaseUrl.toUpperCase(java.util.Locale.ROOT) + "/article");
+        String upperResult = scraperTools.readWebPage(serverBaseUrl.toUpperCase(Locale.ROOT) + "/article");
         assertNotNull(upperResult);
         assertTrue(upperResult.contains("LocalMind AI Release"));
     }
@@ -157,7 +159,7 @@ class WebScraperToolsTest {
     }
 
     @Test
-    @DisplayName("FunctionCallback invocation for WebScraperTools should return extracted text")
+    @DisplayName("ToolCallback invocation for WebScraperTools should return extracted text")
     void functionCallbackExecution() {
         var callback = scraperTools.toolCallback();
         assertNotNull(callback);
@@ -204,7 +206,7 @@ class WebScraperToolsTest {
     @DisplayName("readWebPage() should block a redirect that points into a private network")
     void blocksRedirectToPrivateNetwork() {
         WebScraperTools guarded = new WebScraperTools(new WebScraperProperties(false),
-                address -> !address.isLoopbackAddress() && WebScraperTools.isRestrictedAddress(address));
+                address -> !address.isLoopbackAddress() && RestrictedAddresses.isRestricted(address));
 
         String result = guarded.readWebPage(serverBaseUrl + "/redirect-to-private");
 
@@ -216,17 +218,6 @@ class WebScraperToolsTest {
     void stopsRedirectLoops() {
         String result = scraperTools.readWebPage(serverBaseUrl + "/redirect-loop");
         assertTrue(result.contains("Too many redirects"));
-    }
-
-    @Test
-    @DisplayName("isRestrictedAddress() should cover CGNAT, IPv6 unique-local, unspecified and multicast ranges")
-    void restrictsAdditionalPrivateRanges() throws Exception {
-        assertTrue(WebScraperTools.isRestrictedAddress(java.net.InetAddress.getByName("100.64.0.1")));
-        assertTrue(WebScraperTools.isRestrictedAddress(java.net.InetAddress.getByName("fd12:3456::1")));
-        assertTrue(WebScraperTools.isRestrictedAddress(java.net.InetAddress.getByName("0.0.0.0")));
-        assertTrue(WebScraperTools.isRestrictedAddress(java.net.InetAddress.getByName("224.0.0.1")));
-        assertTrue(WebScraperTools.isRestrictedAddress(java.net.InetAddress.getByName("::ffff:10.0.0.1")));
-        assertFalse(WebScraperTools.isRestrictedAddress(java.net.InetAddress.getByName("93.184.216.34")));
     }
 
     @Test
@@ -250,7 +241,7 @@ class WebScraperToolsTest {
     @DisplayName("readWebPage() should block a host when any of its addresses is private")
     void blocksHostWithAnyPrivateAddress() {
         WebScraperTools guarded = new WebScraperTools(new WebScraperProperties(false),
-                WebScraperTools::isRestrictedAddress, host -> new InetAddress[]{
+                RestrictedAddresses::isRestricted, host -> new InetAddress[]{
                         InetAddress.getByName("93.184.216.34"), InetAddress.getByName("10.0.0.1")});
 
         assertTrue(guarded.readWebPage("http://mixed.test/page").contains("SSRF protection"));
@@ -260,7 +251,7 @@ class WebScraperToolsTest {
     @DisplayName("readWebPage() should connect through the guarded resolver's answer, not a second DNS lookup")
     void connectsThroughGuardedResolver() {
         WebScraperTools guarded = new WebScraperTools(new WebScraperProperties(false),
-                address -> !address.isLoopbackAddress() && WebScraperTools.isRestrictedAddress(address),
+                address -> !address.isLoopbackAddress() && RestrictedAddresses.isRestricted(address),
                 host -> new InetAddress[]{InetAddress.getByName("127.0.0.1")});
 
         String content = guarded.readWebPage("http://scraper.test:" + serverPort + "/article");
@@ -276,18 +267,7 @@ class WebScraperToolsTest {
         assertTrue(result.contains("not a readable text or HTML page"));
     }
 
-    @org.junit.jupiter.params.ParameterizedTest(name = "{0} restricted = {1}")
-    @org.junit.jupiter.params.provider.CsvSource({"192.0.0.8, true", "198.18.0.1, true", "198.19.255.255, true",
-            "240.0.0.1, true", "255.255.255.255, true", "64:ff9b::a00:1, true", "64:ff9b::808:808, false",
-            "64:ff9b:1::1, true", "2002:a00:1::1, true", "2002:808:808::1, false", "2001:0:4136:e378::1, true",
-            "::a00:1, true", "::ffff:808:808, false", "198.20.0.1, false", "192.0.2.1, false",
-            "2606:4700::1111, false"})
-    @DisplayName("isRestrictedAddress() should cover special-purpose IPv4 ranges and IPv6 forms that embed IPv4")
-    void restrictsSpecialPurposeAndEmbeddedRanges(String address, boolean restricted) throws Exception {
-        assertEquals(restricted, WebScraperTools.isRestrictedAddress(InetAddress.getByName(address)));
-    }
-
-    private static void redirect(com.sun.net.httpserver.HttpExchange exchange, String location) throws IOException {
+    private static void redirect(HttpExchange exchange, String location) throws IOException {
         exchange.getResponseHeaders().add("Location", location);
         exchange.sendResponseHeaders(302, -1);
         exchange.close();
