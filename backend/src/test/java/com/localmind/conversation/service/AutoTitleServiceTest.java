@@ -5,22 +5,18 @@ import static org.mockito.Mockito.*;
 
 import com.localmind.conversation.entity.Conversation;
 import com.localmind.conversation.repository.ConversationRepository;
+import com.localmind.support.StubChatModel;
 import com.localmind.support.TestProperties;
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.prompt.Prompt;
-import reactor.core.publisher.Flux;
 
 /**
  * Unit tests for {@link AutoTitleService}: title generation with quote, prefix and reasoning-block cleanup, skipping
@@ -32,28 +28,12 @@ class AutoTitleServiceTest {
     @Mock
     private ConversationRepository conversationRepository;
 
-    private TestChatModel chatModel;
+    private StubChatModel chatModel;
     private AutoTitleService autoTitleService;
-
-    static class TestChatModel implements ChatModel {
-        String responseContent = "Java Virtual Threads";
-        Prompt lastPrompt;
-
-        @Override
-        public ChatResponse call(Prompt prompt) {
-            this.lastPrompt = prompt;
-            return new ChatResponse(List.of(new Generation(new AssistantMessage(responseContent))));
-        }
-
-        @Override
-        public Flux<ChatResponse> stream(Prompt prompt) {
-            return Flux.empty();
-        }
-    }
 
     @BeforeEach
     void setUp() {
-        chatModel = new TestChatModel();
+        chatModel = new StubChatModel();
         autoTitleService = new AutoTitleService(chatModel, conversationRepository, TestProperties.llmDefaults());
     }
 
@@ -65,7 +45,7 @@ class AutoTitleServiceTest {
                 .build();
         when(conversationRepository.findById(convId)).thenReturn(Optional.of(conv));
 
-        chatModel.responseContent = "\"Title: Understanding Java 21\"";
+        chatModel.reply("\"Title: Understanding Java 21\"");
 
         autoTitleService.generateTitleAsync(convId, "Explain Java 21 virtual threads", "gemma3:1b");
 
@@ -81,7 +61,7 @@ class AutoTitleServiceTest {
                 .build();
         when(conversationRepository.findById(convId)).thenReturn(Optional.of(conv));
 
-        chatModel.responseContent = "<think>The user wants to know about Spring Boot setup.</think>Spring Boot Setup";
+        chatModel.reply("<think>The user wants to know about Spring Boot setup.</think>Spring Boot Setup");
 
         autoTitleService.generateTitleAsync(convId, "How do I configure Spring Boot?", "deepseek-r1");
 
@@ -103,8 +83,8 @@ class AutoTitleServiceTest {
         verify(conversationRepository, never()).replacePlaceholderTitle(any(), any(), any(), any());
     }
 
-    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
-    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {"Don't Panic Guide | Don't Panic Guide",
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', value = {"Don't Panic Guide | Don't Panic Guide",
             "'Quoted Title' | Quoted Title", "\"Double Quoted\" | Double Quoted", "**Title:** Bold Title | Bold Title",
             "\u2018Curly Quoted\u2019 | Curly Quoted"})
     void cleanTitleKeepsApostrophesButDropsWrappingQuotes(String raw, String expected) {

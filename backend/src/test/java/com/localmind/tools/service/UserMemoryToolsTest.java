@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 
 import com.localmind.memory.entity.UserMemory;
 import com.localmind.memory.repository.UserMemoryRepository;
+import com.localmind.support.RecordingVectorStore;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -18,8 +19,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 
 /**
  * Unit tests for {@link UserMemoryTools}: saving facts with length and duplicate checks, recall by vector search with a
@@ -32,39 +31,12 @@ class UserMemoryToolsTest {
     @Mock
     private UserMemoryRepository userMemoryRepository;
 
-    private TestVectorStore vectorStore;
+    private RecordingVectorStore vectorStore;
     private UserMemoryTools userMemoryTools;
-
-    static class TestVectorStore implements VectorStore {
-        final List<Document> addedDocuments = new ArrayList<>();
-        List<Document> searchResults = new ArrayList<>();
-        RuntimeException addFailure;
-
-        @Override
-        public void add(List<Document> documents) {
-            if (addFailure != null) {
-                throw addFailure;
-            }
-            addedDocuments.addAll(documents);
-        }
-
-        @Override
-        public void delete(List<String> idList) {
-        }
-
-        @Override
-        public void delete(org.springframework.ai.vectorstore.filter.Filter.Expression filterExpression) {
-        }
-
-        @Override
-        public List<Document> similaritySearch(SearchRequest request) {
-            return searchResults;
-        }
-    }
 
     @BeforeEach
     void setUp() {
-        vectorStore = new TestVectorStore();
+        vectorStore = new RecordingVectorStore();
         userMemoryTools = new UserMemoryTools(userMemoryRepository, vectorStore,
                 new UserMemoryWriteService(userMemoryRepository, vectorStore));
     }
@@ -89,8 +61,8 @@ class UserMemoryToolsTest {
         assertEquals("user-42", captor.getValue().getUserId());
         assertEquals("User prefers Python over JavaScript", captor.getValue().getMemoryFact());
 
-        assertEquals(1, vectorStore.addedDocuments.size());
-        Document doc = vectorStore.addedDocuments.get(0);
+        assertEquals(1, vectorStore.added().size());
+        Document doc = vectorStore.added().get(0);
         assertEquals("User prefers Python over JavaScript", doc.getText());
         assertEquals("user-42", doc.getMetadata().get("userId"));
         assertEquals("USER_MEMORY", doc.getMetadata().get("type"));
@@ -104,7 +76,7 @@ class UserMemoryToolsTest {
 
         assertTrue(result.toLowerCase().contains("missing") || result.toLowerCase().contains("security"));
         verifyNoInteractions(userMemoryRepository);
-        assertTrue(vectorStore.addedDocuments.isEmpty());
+        assertTrue(vectorStore.added().isEmpty());
 
         String nullContextResult = userMemoryTools.saveUserMemory("Some fact", null);
         assertTrue(nullContextResult.toLowerCase().contains("missing")
@@ -119,11 +91,11 @@ class UserMemoryToolsTest {
 
         assertTrue(result.toLowerCase().contains("error") || result.toLowerCase().contains("blank"));
         verifyNoInteractions(userMemoryRepository);
-        assertTrue(vectorStore.addedDocuments.isEmpty());
+        assertTrue(vectorStore.added().isEmpty());
     }
 
     @Test
-    @DisplayName("FunctionCallback for UserMemoryTools should extract ToolContext and save memory")
+    @DisplayName("ToolCallback for UserMemoryTools should extract ToolContext and save memory")
     void functionCallbackExecution() {
         when(userMemoryRepository.save(any(UserMemory.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -136,16 +108,17 @@ class UserMemoryToolsTest {
 
         assertNotNull(response);
         assertTrue(response.contains("Memory saved successfully"));
-        assertEquals(1, vectorStore.addedDocuments.size());
-        assertEquals("user-callback", vectorStore.addedDocuments.get(0).getMetadata().get("userId"));
+        assertEquals(1, vectorStore.added().size());
+        assertEquals("user-callback", vectorStore.added().get(0).getMetadata().get("userId"));
     }
 
     @Test
     @DisplayName("recallUserMemories() should return semantic vector search matches when available")
     void recallUserMemoriesSemanticSearchSuccess() {
-        vectorStore.searchResults = List.of(
+        vectorStore.returnOnSearch(List.of(
                 new Document("User prefers dark mode", Map.of("userId", "user-42", "type", "USER_MEMORY")),
-                new Document("User is a senior software engineer", Map.of("userId", "user-42", "type", "USER_MEMORY")));
+                new Document("User is a senior software engineer",
+                        Map.of("userId", "user-42", "type", "USER_MEMORY"))));
 
         ToolContext context = new ToolContext(Map.of("userId", "user-42"));
         String result = userMemoryTools.recallUserMemories("What does user prefer?", context);
@@ -159,7 +132,7 @@ class UserMemoryToolsTest {
     @Test
     @DisplayName("recallUserMemories() should fall back to relational database when vector search yields no matches")
     void recallUserMemoriesFallbackToDatabase() {
-        vectorStore.searchResults = List.of();
+        vectorStore.returnOnSearch(List.of());
         when(userMemoryRepository.findByUserIdOrderByCreatedAtDesc("user-42")).thenReturn(List.of(
                 UserMemory.builder().id("mem-1").userId("user-42").memoryFact("User has a pet dog named Max").build(),
                 UserMemory.builder().id("mem-2").userId("user-42").memoryFact("Prefers concise responses").build()));
@@ -187,8 +160,8 @@ class UserMemoryToolsTest {
     }
 
     @Test
-    @DisplayName("FunctionCallback for recallUserMemories should parse request and execute")
-    void recallFunctionCallbackExecution() {
+    @DisplayName("ToolCallback for recallUserMemories should parse request and execute")
+    void recallToolCallbackExecution() {
         when(userMemoryRepository.findByUserIdOrderByCreatedAtDesc("user-callback"))
                 .thenReturn(List.of(UserMemory.builder().id("mem-3")
                         .userId("user-callback").memoryFact("Birthday is in September").build()));
@@ -213,7 +186,7 @@ class UserMemoryToolsTest {
 
         assertTrue(result.startsWith("Error: Memory fact is too long"));
         verify(userMemoryRepository, never()).save(any());
-        assertTrue(vectorStore.addedDocuments.isEmpty());
+        assertTrue(vectorStore.added().isEmpty());
     }
 
     @Test
@@ -225,7 +198,7 @@ class UserMemoryToolsTest {
 
         assertEquals("Memory already saved: Likes tea", result);
         verify(userMemoryRepository, never()).save(any());
-        assertTrue(vectorStore.addedDocuments.isEmpty());
+        assertTrue(vectorStore.added().isEmpty());
     }
 
     @Test
@@ -247,7 +220,7 @@ class UserMemoryToolsTest {
     @Test
     @DisplayName("saveUserMemory() should return a fixed error without exception text when embedding fails")
     void saveUserMemoryEmbeddingFailure() {
-        vectorStore.addFailure = new IllegalStateException("qdrant down at 10.0.0.5");
+        vectorStore.failOnAdd(new IllegalStateException("qdrant down at 10.0.0.5"));
 
         String result = userMemoryTools.saveUserMemory("Likes tea", new ToolContext(Map.of("userId", "user-42")));
 

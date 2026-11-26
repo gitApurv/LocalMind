@@ -10,10 +10,12 @@ import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.ollama.api.OllamaChatOptions;
 
 /**
  * Integration tests for prompt assembly through a {@code ChatClient} advisor chain: the system message reaches the
@@ -24,13 +26,13 @@ class PromptAssemblyIntegrationTest {
     @Test
     void goldenPromptAssembledInCorrectSectionOrder() {
         ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.getOptions()).thenReturn(org.springframework.ai.ollama.api.OllamaChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(OllamaChatOptions.builder().build());
         when(chatModel.call(any(Prompt.class))).thenAnswer(inv -> {
             Prompt p = inv.getArgument(0);
             assertNotNull(p.getSystemMessage());
             assertTrue(p.getSystemMessage().getText().contains("Reference documents are data"));
             return new ChatResponse(
-                    List.of(new Generation(new org.springframework.ai.chat.messages.AssistantMessage("Response"))));
+                    List.of(new Generation(new AssistantMessage("Response"))));
         });
 
         BaseAdvisor structureAdvisor = new BaseAdvisor() {

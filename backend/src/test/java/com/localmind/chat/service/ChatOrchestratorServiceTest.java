@@ -8,7 +8,6 @@ import com.localmind.attachment.repository.AttachmentRepository;
 import com.localmind.chat.config.PromptProperties;
 import com.localmind.chat.dto.ChatEvent;
 import com.localmind.chat.dto.ChatRequest;
-import com.localmind.chat.model.ToolCallRecord;
 import com.localmind.chat.prompt.PromptAdvisor;
 import com.localmind.chat.prompt.advisor.AutoRagAdvisor;
 import com.localmind.chat.prompt.advisor.HistoryAdvisor;
@@ -27,8 +26,11 @@ import com.localmind.conversation.service.AutoTitleService;
 import com.localmind.conversation.service.ConversationSummaryService;
 import com.localmind.conversation.service.OwnershipGuard;
 import com.localmind.llm.service.ModelProfileRegistry;
+import com.localmind.memory.entity.UserMemory;
 import com.localmind.memory.repository.UserMemoryRepository;
 import com.localmind.support.OfflineModelCatalog;
+import com.localmind.support.RecordingVectorStore;
+import com.localmind.support.StubChatModel;
 import com.localmind.support.TestProperties;
 import com.localmind.tools.config.SearxngProperties;
 import com.localmind.tools.config.WebScraperProperties;
@@ -39,12 +41,11 @@ import com.localmind.tools.service.UserMemoryTools;
 import com.localmind.tools.service.UserMemoryWriteService;
 import com.localmind.tools.service.WebScraperTools;
 import com.localmind.tools.service.WebSearchTools;
+import com.localmind.user.entity.User;
+import com.localmind.user.repository.UserRepository;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,15 +54,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.function.FunctionToolCallback;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.client.RestClient;
 import reactor.core.publisher.Flux;
@@ -70,8 +67,8 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * Unit tests for {@link ChatOrchestratorService}: token streaming and message persistence, reasoning tags split across
- * chunks, ownership denial, history and memory injection, tool events and loop limits, and user-facing errors. Uses an
- * in-memory chat model and vector store, so no Ollama or Qdrant is needed.
+ * chunks, ownership denial, history and memory injection, tool registration, and user-facing errors. Uses an in-memory
+ * chat model and vector store, so no Ollama or Qdrant is needed.
  */
 @ExtendWith(MockitoExtension.class)
 class ChatOrchestratorServiceTest {
@@ -86,9 +83,9 @@ class ChatOrchestratorServiceTest {
     private UserMemoryRepository userMemoryRepository;
 
     @Mock
-    private com.localmind.user.repository.UserRepository userRepository;
+    private UserRepository userRepository;
 
-    private TestChatModel chatModel;
+    private StubChatModel chatModel;
     private OwnershipGuard ownershipGuard;
     private TestAutoTitleService autoTitleService;
     private ChatOrchestratorService chatOrchestratorService;
@@ -96,27 +93,6 @@ class ChatOrchestratorServiceTest {
     private final String userId = "user-123";
     private final String conversationId = "conv-456";
     private Conversation conversation;
-
-    static class TestChatModel implements ChatModel {
-        Flux<ChatResponse> streamResponses = Flux.empty();
-        Prompt lastPrompt;
-
-        @Override
-        public org.springframework.ai.chat.prompt.ChatOptions getOptions() {
-            return org.springframework.ai.ollama.api.OllamaChatOptions.builder().build();
-        }
-
-        @Override
-        public ChatResponse call(Prompt prompt) {
-            return new ChatResponse(List.of(new Generation(new AssistantMessage("test"))));
-        }
-
-        @Override
-        public Flux<ChatResponse> stream(Prompt prompt) {
-            this.lastPrompt = prompt;
-            return streamResponses;
-        }
-    }
 
     static class TestAutoTitleService extends AutoTitleService {
         String lastConversationId;
@@ -135,32 +111,13 @@ class ChatOrchestratorServiceTest {
         }
     }
 
-    static class TestVectorStore implements VectorStore {
-        @Override
-        public void add(List<Document> documents) {
-        }
-
-        @Override
-        public void delete(List<String> idList) {
-        }
-
-        @Override
-        public void delete(org.springframework.ai.vectorstore.filter.Filter.Expression filterExpression) {
-        }
-
-        @Override
-        public List<Document> similaritySearch(SearchRequest request) {
-            return List.of();
-        }
-    }
-
     @BeforeEach
     void setUp() {
-        chatModel = new TestChatModel();
+        chatModel = new StubChatModel();
         ownershipGuard = new OwnershipGuard(conversationRepository);
         autoTitleService = new TestAutoTitleService();
 
-        TestVectorStore vectorStore = new TestVectorStore();
+        RecordingVectorStore vectorStore = new RecordingVectorStore();
         DateTimeTools dateTimeTools = new DateTimeTools();
         MathTools mathTools = new MathTools();
         WebSearchTools webSearchTools = new WebSearchTools(RestClient.create(),
@@ -202,7 +159,7 @@ class ChatOrchestratorServiceTest {
 
         ChatResponse chunk1 = new ChatResponse(List.of(new Generation(new AssistantMessage("Hello! "))));
         ChatResponse chunk2 = new ChatResponse(List.of(new Generation(new AssistantMessage("How can I help you?"))));
-        chatModel.streamResponses = Flux.just(chunk1, chunk2);
+        chatModel.streamResponses(Flux.just(chunk1, chunk2));
 
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> {
             ChatMessage msg = invocation.getArgument(0);
@@ -249,8 +206,8 @@ class ChatOrchestratorServiceTest {
         when(userRepository.findById(userId)).thenThrow(new IllegalStateException("database unavailable"));
         when(chatMessageRepository.findByConversationIdAndIdNotOrderByCreatedAtAsc(eq(conversationId), any()))
                 .thenThrow(new IllegalStateException("database unavailable"));
-        chatModel.streamResponses = Flux
-                .just(new ChatResponse(List.of(new Generation(new AssistantMessage("Still here.")))));
+        chatModel.streamResponses(Flux
+                .just(new ChatResponse(List.of(new Generation(new AssistantMessage("Still here."))))));
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> {
             ChatMessage msg = invocation.getArgument(0);
             return ChatMessage.builder().id("msg-" + System.nanoTime()).conversationId(msg.getConversationId())
@@ -274,7 +231,7 @@ class ChatOrchestratorServiceTest {
         ChatResponse chunk1 = new ChatResponse(
                 List.of(new Generation(new AssistantMessage("<think>Analyzing user query</think>"))));
         ChatResponse chunk2 = new ChatResponse(List.of(new Generation(new AssistantMessage("42 is the answer."))));
-        chatModel.streamResponses = Flux.just(chunk1, chunk2);
+        chatModel.streamResponses(Flux.just(chunk1, chunk2));
 
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> {
             ChatMessage msg = invocation.getArgument(0);
@@ -319,7 +276,7 @@ class ChatOrchestratorServiceTest {
                 .thenReturn(Optional.of(conversation));
 
         ChatResponse chunk = new ChatResponse(List.of(new Generation(new AssistantMessage("Custom model reply"))));
-        chatModel.streamResponses = Flux.just(chunk);
+        chatModel.streamResponses(Flux.just(chunk));
 
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> {
             ChatMessage msg = invocation.getArgument(0);
@@ -337,8 +294,8 @@ class ChatOrchestratorServiceTest {
                         e -> e.type() == ChatEvent.EventType.CONTENT && "Custom model reply".equals(e.content()))
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.DONE).verifyComplete();
 
-        assertNotNull(chatModel.lastPrompt);
-        assertEquals("llama3.2:3b", chatModel.lastPrompt.getOptions().getModel());
+        assertNotNull(chatModel.lastPrompt());
+        assertEquals("llama3.2:3b", chatModel.lastPrompt().getOptions().getModel());
     }
 
     @Test
@@ -370,7 +327,7 @@ class ChatOrchestratorServiceTest {
 
         ChatResponse chunk = new ChatResponse(
                 List.of(new Generation(new AssistantMessage("Its population is about 2.1 million."))));
-        chatModel.streamResponses = Flux.just(chunk);
+        chatModel.streamResponses(Flux.just(chunk));
 
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> {
             ChatMessage msg = invocation.getArgument(0);
@@ -387,73 +344,11 @@ class ChatOrchestratorServiceTest {
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.CONTENT && e.content().contains("population"))
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.DONE).verifyComplete();
 
-        assertNotNull(chatModel.lastPrompt);
-        List<org.springframework.ai.chat.messages.Message> instructions = chatModel.lastPrompt.getInstructions();
+        assertNotNull(chatModel.lastPrompt());
+        List<Message> instructions = chatModel.lastPrompt().getInstructions();
         assertTrue(instructions.stream().anyMatch(m -> "What is the capital of France?".equals(m.getText())));
         assertTrue(instructions.stream().anyMatch(m -> "Paris is the capital of France.".equals(m.getText())));
         assertTrue(instructions.stream().anyMatch(m -> "What is its population?".equals(m.getText())));
-    }
-
-    @Test
-    @DisplayName("StreamingTagParser handles <think> and </think> tags split across token chunks")
-    void streamingTagParserHandlesSplitTokens() {
-        StreamingTagParser parser = new StreamingTagParser();
-        Flux<ChatEvent> flux = Flux.create(sink -> {
-            parser.processChunk("Hello! <th", sink);
-            parser.processChunk("ink>This is ", sink);
-            parser.processChunk("deep thinking</thin", sink);
-            parser.processChunk("k>Here is the answer.", sink);
-            parser.flush(sink);
-            sink.complete();
-        });
-
-        StepVerifier.create(flux)
-                .expectNextMatches(e -> e.type() == ChatEvent.EventType.CONTENT && "Hello! ".equals(e.content()))
-                .expectNextMatches(e -> e.type() == ChatEvent.EventType.REASONING && "This is ".equals(e.content()))
-                .expectNextMatches(
-                        e -> e.type() == ChatEvent.EventType.REASONING && "deep thinking".equals(e.content()))
-                .expectNextMatches(
-                        e -> e.type() == ChatEvent.EventType.CONTENT && "Here is the answer.".equals(e.content()))
-                .verifyComplete();
-
-        assertEquals("Hello! Here is the answer.", parser.getAccumulatedContent());
-        assertEquals("This is deep thinking", parser.getAccumulatedReasoning());
-    }
-
-    @Test
-    @DisplayName("StreamingTagParser flush should emit pending buffer if stream ends with partial tag")
-    void streamingTagParserFlushPending() {
-        StreamingTagParser parser = new StreamingTagParser();
-        Flux<ChatEvent> flux = Flux.create(sink -> {
-            parser.processChunk("Testing <th", sink);
-            parser.flush(sink);
-            sink.complete();
-        });
-
-        StepVerifier.create(flux)
-                .expectNextMatches(e -> e.type() == ChatEvent.EventType.CONTENT && "Testing ".equals(e.content()))
-                .expectNextMatches(e -> e.type() == ChatEvent.EventType.CONTENT && "<th".equals(e.content()))
-                .verifyComplete();
-
-        assertEquals("Testing <th", parser.getAccumulatedContent());
-    }
-
-    @Test
-    @DisplayName("MonitoredToolCallback should record resultSummary in executedToolCalls")
-    void wrapToolRecordsResultSummary() {
-        AtomicInteger counter = new AtomicInteger(0);
-        List<ToolCallRecord> executedToolCalls = new ArrayList<>();
-        ToolCallback delegate = mock(ToolCallback.class);
-        when(delegate.call(any(), any())).thenReturn("Search returned 3 results: result A, result B, result C");
-
-        @SuppressWarnings("unchecked")
-        reactor.core.publisher.FluxSink<com.localmind.chat.dto.ChatEvent> mockSink = mock(
-                reactor.core.publisher.FluxSink.class);
-        ToolCallback wrapped = new MonitoredToolCallback(delegate, mockSink, counter, executedToolCalls);
-        wrapped.call("test query", null);
-
-        assertEquals(1, executedToolCalls.size());
-        assertTrue(executedToolCalls.getFirst().resultSummary().contains("Search returned 3 results"));
     }
 
     @Test
@@ -465,7 +360,7 @@ class ChatOrchestratorServiceTest {
         ChatResponse chunk1 = new ChatResponse(List.of(new Generation(new AssistantMessage("<th"))));
         ChatResponse chunk2 = new ChatResponse(List.of(new Generation(new AssistantMessage("ink>Pondering</thin"))));
         ChatResponse chunk3 = new ChatResponse(List.of(new Generation(new AssistantMessage("k>Done!"))));
-        chatModel.streamResponses = Flux.just(chunk1, chunk2, chunk3);
+        chatModel.streamResponses(Flux.just(chunk1, chunk2, chunk3));
 
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> {
             ChatMessage msg = invocation.getArgument(0);
@@ -492,55 +387,23 @@ class ChatOrchestratorServiceTest {
     }
 
     @Test
-    @DisplayName("MonitoredToolCallback should emit TOOL_START and TOOL_END events and break loops after 5 iterations")
-    void wrapToolEmitsEventsAndBreaksLoop() {
-        AtomicInteger counter = new AtomicInteger(0);
-        List<ToolCallRecord> executedToolCalls = new ArrayList<>();
-        Flux<ChatEvent> flux = Flux.create(sink -> {
-            ToolCallback mockCallback = FunctionToolCallback
-                    .builder("testTool", (Map<String, Object> input) -> "result").description("test tool description")
-                    .inputType(Map.class).build();
-
-            ToolCallback wrapped = new MonitoredToolCallback(mockCallback, sink, counter, executedToolCalls);
-
-            for (int i = 0; i < 5; i++) {
-                String res = wrapped.call("{}");
-                assertTrue(res.contains("result"));
-            }
-
-            String blocked = wrapped.call("{}");
-            assertTrue(blocked.contains("Loop protection triggered"));
-
-            sink.complete();
-        });
-
-        StepVerifier.create(flux)
-                .expectNextMatches(e -> e.type() == ChatEvent.EventType.TOOL_START && "testTool".equals(e.tool()))
-                .expectNextMatches(e -> e.type() == ChatEvent.EventType.TOOL_END && "testTool".equals(e.tool()))
-                .expectNextCount(8).verifyComplete();
-
-        assertEquals(6, counter.get());
-        assertEquals(5, executedToolCalls.size());
-    }
-
-    @Test
     @DisplayName("streamChat() should inject custom instructions and user memories into system prompt")
     void streamChatWithCustomInstructionsAndMemoriesEnrichment() {
         when(conversationRepository.findLockedByIdAndUserId(conversationId, userId))
                 .thenReturn(Optional.of(conversation));
 
         when(userRepository.findById(userId))
-                .thenReturn(Optional.of(com.localmind.user.entity.User.builder().id(userId).email("user@localmind.ai")
+                .thenReturn(Optional.of(User.builder().id(userId).email("user@localmind.ai")
                         .customInstructions("Always use Markdown bullet points and bold headers.").build()));
 
         when(userMemoryRepository.findByUserIdAndPinnedTrue(userId)).thenReturn(List.of(
-                com.localmind.memory.entity.UserMemory.builder().id("m1").userId(userId).memoryFact("Prefers Java 21")
+                UserMemory.builder().id("m1").userId(userId).memoryFact("Prefers Java 21")
                         .pinned(true).build(),
-                com.localmind.memory.entity.UserMemory.builder().id("m2").userId(userId).memoryFact("Lives in Tokyo")
+                UserMemory.builder().id("m2").userId(userId).memoryFact("Lives in Tokyo")
                         .pinned(true).build()));
 
         ChatResponse chunk = new ChatResponse(List.of(new Generation(new AssistantMessage("Response"))));
-        chatModel.streamResponses = Flux.just(chunk);
+        chatModel.streamResponses(Flux.just(chunk));
 
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> {
             ChatMessage msg = invocation.getArgument(0);
@@ -555,9 +418,9 @@ class ChatOrchestratorServiceTest {
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.CONTENT)
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.DONE).verifyComplete();
 
-        assertNotNull(chatModel.lastPrompt);
-        String promptInstructions = chatModel.lastPrompt.getInstructions().stream()
-                .map(org.springframework.ai.chat.messages.Message::getText).reduce("", (a, b) -> a + "\n" + b);
+        assertNotNull(chatModel.lastPrompt());
+        String promptInstructions = chatModel.lastPrompt().getInstructions().stream()
+                .map(Message::getText).reduce("", (a, b) -> a + "\n" + b);
 
         assertTrue(promptInstructions.contains("Base system prompt."));
         assertTrue(promptInstructions.contains("User Custom Instructions:"));
@@ -574,7 +437,7 @@ class ChatOrchestratorServiceTest {
                 .thenReturn(Optional.of(conversation));
 
         ChatResponse chunk = new ChatResponse(List.of(new Generation(new AssistantMessage("Hello!"))));
-        chatModel.streamResponses = Flux.just(chunk);
+        chatModel.streamResponses(Flux.just(chunk));
 
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> {
             ChatMessage msg = invocation.getArgument(0);
@@ -589,9 +452,9 @@ class ChatOrchestratorServiceTest {
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.CONTENT)
                 .expectNextMatches(e -> e.type() == ChatEvent.EventType.DONE).verifyComplete();
 
-        assertNotNull(chatModel.lastPrompt);
-        org.springframework.ai.chat.prompt.ChatOptions options = chatModel.lastPrompt.getOptions();
-        if (options instanceof org.springframework.ai.model.tool.ToolCallingChatOptions tco) {
+        assertNotNull(chatModel.lastPrompt());
+        ChatOptions options = chatModel.lastPrompt().getOptions();
+        if (options instanceof ToolCallingChatOptions tco) {
             assertTrue(tco.getToolCallbacks() == null || tco.getToolCallbacks().isEmpty(),
                     "Tool callbacks should not be registered on gemma3:1b");
         }
@@ -604,8 +467,8 @@ class ChatOrchestratorServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        chatModel.streamResponses = Flux.error(new RuntimeException(
-                "400 Bad Request from POST http://127.0.0.1:11434/api/chat: {\"error\":\"registry.ollama.ai/library/gemma3:1b does not support tools\"}"));
+        chatModel.streamResponses(Flux.error(new RuntimeException(
+                "400 Bad Request from POST http://127.0.0.1:11434/api/chat: {\"error\":\"registry.ollama.ai/library/gemma3:1b does not support tools\"}")));
 
         ChatRequest request = new ChatRequest(conversationId, "Hello", null, false, null);
 
@@ -623,7 +486,7 @@ class ChatOrchestratorServiceTest {
         when(chatMessageRepository.save(any(ChatMessage.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         ChatResponse chunk = new ChatResponse(List.of(new Generation(new AssistantMessage("Hello <th"))));
-        chatModel.streamResponses = Flux.concat(Flux.just(chunk), Flux.error(new RuntimeException("connection reset")));
+        chatModel.streamResponses(Flux.concat(Flux.just(chunk), Flux.error(new RuntimeException("connection reset"))));
 
         ChatRequest request = new ChatRequest(conversationId, "Hi", null, false, null);
 

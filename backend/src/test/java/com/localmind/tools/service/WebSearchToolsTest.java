@@ -96,7 +96,7 @@ class WebSearchToolsTest {
     }
 
     @Test
-    @DisplayName("FunctionCallback invocation for WebSearchTools should return formatted text results")
+    @DisplayName("ToolCallback invocation for WebSearchTools should return formatted text results")
     void functionCallbackExecution() {
         String mockSearxngResponse = """
                 {

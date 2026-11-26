@@ -19,6 +19,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -55,7 +56,7 @@ class HistoryAdvisorTest {
         ChatClientRequest result = advisor.before(request, chain);
 
         assertNotNull(result);
-        List<org.springframework.ai.chat.messages.Message> instructions = result.prompt().getInstructions();
+        List<Message> instructions = result.prompt().getInstructions();
         assertTrue(instructions.size() >= 3);
         assertEquals("<summary>\nUser loves TypeScript\n</summary>", instructions.get(0).getText());
     }
@@ -73,7 +74,7 @@ class HistoryAdvisorTest {
                 .context(Map.of("conversationId", "c1", "currentMessageId", "current")).build();
 
         List<String> texts = advisor.before(request, mock(AdvisorChain.class)).prompt().getInstructions().stream()
-                .map(org.springframework.ai.chat.messages.Message::getText).toList();
+                .map(Message::getText).toList();
 
         assertEquals(List.of("Rules", "Earlier question", "Earlier answer", "Current question"), texts);
     }

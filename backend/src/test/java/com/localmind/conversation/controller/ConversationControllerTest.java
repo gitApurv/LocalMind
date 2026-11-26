@@ -6,6 +6,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import com.localmind.attachment.repository.AttachmentRepository;
 import com.localmind.conversation.dto.CreateConversationRequest;
 import com.localmind.conversation.dto.UpdateConversationRequest;
 import com.localmind.conversation.entity.ChatMessage;
@@ -51,7 +52,7 @@ class ConversationControllerTest {
     private ChatMessageRepository chatMessageRepository;
 
     @Autowired
-    private com.localmind.attachment.repository.AttachmentRepository attachmentRepository;
+    private AttachmentRepository attachmentRepository;
 
     @Autowired
     private UserRepository userRepository;

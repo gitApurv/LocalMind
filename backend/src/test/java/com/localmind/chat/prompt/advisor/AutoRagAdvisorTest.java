@@ -7,6 +7,7 @@ import com.localmind.attachment.entity.Attachment;
 import com.localmind.attachment.repository.AttachmentRepository;
 import com.localmind.chat.prompt.token.CharacterTokenCounter;
 import com.localmind.chat.prompt.token.TokenCounter;
+import com.localmind.support.RecordingVectorStore;
 import com.localmind.support.TestProperties;
 import java.util.List;
 import java.util.Map;
@@ -16,8 +17,6 @@ import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 
 /**
  * Unit tests for {@link AutoRagAdvisor}: retrieval skipped without ready attachments, reference excerpts injected into
@@ -25,27 +24,7 @@ import org.springframework.ai.vectorstore.VectorStore;
  */
 class AutoRagAdvisorTest {
 
-    static class TestVectorStore implements VectorStore {
-        List<Document> simResults = List.of();
-        int searchCount = 0;
-
-        @Override
-        public void add(List<Document> documents) {
-        }
-        @Override
-        public void delete(List<String> idList) {
-        }
-        @Override
-        public void delete(org.springframework.ai.vectorstore.filter.Filter.Expression filterExpression) {
-        }
-        @Override
-        public List<Document> similaritySearch(SearchRequest request) {
-            searchCount++;
-            return simResults;
-        }
-    }
-
-    private final TestVectorStore vectorStore = new TestVectorStore();
+    private final RecordingVectorStore vectorStore = new RecordingVectorStore();
     private final AttachmentRepository attachmentRepository = mock(AttachmentRepository.class);
     private final TokenCounter tokenCounter = new CharacterTokenCounter();
     private final AutoRagAdvisor advisor = new AutoRagAdvisor(vectorStore, attachmentRepository, tokenCounter,
@@ -62,15 +41,15 @@ class AutoRagAdvisorTest {
         AdvisorChain chain = mock(AdvisorChain.class);
         ChatClientRequest result = advisor.before(request, chain);
 
-        assertEquals(0, vectorStore.searchCount);
+        assertEquals(0, vectorStore.searches().size());
         assertEquals(request, result);
     }
 
     @Test
     void injectsReferenceExcerptsWhenAttachmentsExist() {
         when(attachmentRepository.existsByConversationIdAndStatus("c1", Attachment.Status.READY)).thenReturn(true);
-        vectorStore.simResults = List
-                .of(new Document("Report content summary", Map.of("fileName", "report.pdf", "type", "DOC_CHUNK")));
+        vectorStore.returnOnSearch(List
+                .of(new Document("Report content summary", Map.of("fileName", "report.pdf", "type", "DOC_CHUNK"))));
 
         ChatClientRequest request = ChatClientRequest.builder().prompt(new Prompt(new UserMessage("Summarize report")))
                 .context(Map.of("conversationId", "c1", "userId", "u1")).build();

@@ -31,7 +31,7 @@ class DateTimeToolsTest {
     }
 
     @Test
-    @DisplayName("FunctionCallback for DateTimeTools should execute with empty request payload")
+    @DisplayName("ToolCallback for DateTimeTools should execute with empty request payload")
     void functionCallbackExecution() {
         var callback = dateTimeTools.toolCallback();
         assertNotNull(callback);

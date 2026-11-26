@@ -66,7 +66,7 @@ class MathToolsTest {
     }
 
     @Test
-    @DisplayName("FunctionCallback invocation for MathTools should parse JSON argument and return result")
+    @DisplayName("ToolCallback invocation for MathTools should parse JSON argument and return result")
     void functionCallbackExecution() {
         var callback = mathTools.toolCallback();
         assertNotNull(callback);

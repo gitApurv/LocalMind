@@ -7,6 +7,7 @@ import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.conversation.entity.ChatMessage;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.Message;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -28,7 +29,7 @@ class HistoryTrimmerTest {
         List<ChatMessage> history = List.of(u1, a1, u2, a2);
         int budget = tokenCounter.estimate("Hello 2") + tokenCounter.estimate("Hi 2");
         TrimmedHistory result = trimmer.trimToBudget(history, budget);
-        List<org.springframework.ai.chat.messages.Message> trimmed = result.messages();
+        List<Message> trimmed = result.messages();
 
         assertEquals(2, trimmed.size());
         assertEquals(List.of(u1, a1), result.dropped());
@@ -48,7 +49,7 @@ class HistoryTrimmerTest {
         TrimmedHistory result = trimmer.trimToBudget(List.of(u1, a1, failed, u2, a2, lastFailed), 10_000);
 
         assertEquals(List.of("Hello 1", "Hi 1", "Hello 2", "Hi 2"),
-                result.messages().stream().map(org.springframework.ai.chat.messages.Message::getText).toList());
+                result.messages().stream().map(Message::getText).toList());
         assertEquals(List.of(), result.dropped());
     }
 

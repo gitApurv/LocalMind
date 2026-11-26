@@ -16,6 +16,8 @@ import com.localmind.auth.service.RefreshTokenCleanupService;
 import com.localmind.support.OfflineAiStack;
 import com.localmind.user.entity.User;
 import com.localmind.user.repository.UserRepository;
+import java.time.Duration;
+import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -341,7 +343,7 @@ class AuthControllerTest {
     @Test
     @DisplayName("A token signed with LocalMind's key but issued by someone else should be rejected with 401")
     void tokenFromOtherIssuerRejected() throws Exception {
-        java.time.Instant now = java.time.Instant.now();
+        Instant now = Instant.now();
         JwtClaimsSet claims = JwtClaimsSet.builder().issuer("someone-else").issuedAt(now)
                 .expiresAt(now.plusSeconds(300)).subject("u1").claim("userId", "u1").build();
         String token = jwtEncoder.encode(JwtEncoderParameters.from(claims)).getTokenValue();
@@ -400,7 +402,7 @@ class AuthControllerTest {
 
     private void ageRotations() {
         refreshTokenRepository.findAll().stream().filter(token -> token.getRotatedAt() != null).forEach(token -> {
-            token.setRotatedAt(java.time.Instant.now().minus(java.time.Duration.ofMinutes(5)));
+            token.setRotatedAt(Instant.now().minus(Duration.ofMinutes(5)));
             refreshTokenRepository.save(token);
         });
     }

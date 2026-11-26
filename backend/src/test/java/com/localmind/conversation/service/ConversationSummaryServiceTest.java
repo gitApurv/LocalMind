@@ -10,6 +10,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -30,7 +32,7 @@ class ConversationSummaryServiceTest {
         Conversation conv = Conversation.builder().id("c1").userId("u1").build();
         when(conversationRepository.findById("c1")).thenReturn(Optional.of(conv));
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
-                new org.springframework.ai.chat.messages.AssistantMessage("User is planning a vacation to Paris.")))));
+                new AssistantMessage("User is planning a vacation to Paris.")))));
 
         Instant createdAt = Instant.parse("2026-01-01T10:00:00Z");
         ChatMessage u = ChatMessage.builder().role(ChatMessage.Role.USER).content("I want to visit Paris")
@@ -60,11 +62,11 @@ class ConversationSummaryServiceTest {
         Conversation conv = Conversation.builder().id("c1").userId("u1").build();
         when(conversationRepository.findById("c1")).thenReturn(Optional.of(conv));
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(
-                new Generation(new org.springframework.ai.chat.messages.AssistantMessage("Some summary.")))));
+                new Generation(new AssistantMessage("Some summary.")))));
         ChatMessage undated = ChatMessage.builder().role(ChatMessage.Role.USER).content("No timestamp").build();
 
         service.summarizeDroppedTurnsAsync("c1", List.of(undated), "gemma3:1b");
 
-        verify(conversationRepository, org.mockito.Mockito.never()).updateSummary(any(), any(), any());
+        verify(conversationRepository, Mockito.never()).updateSummary(any(), any(), any());
     }
 }

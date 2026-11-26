@@ -5,6 +5,7 @@ import static org.mockito.Mockito.*;
 
 import com.localmind.attachment.entity.Attachment;
 import com.localmind.attachment.repository.AttachmentRepository;
+import com.localmind.llm.model.ModelProfile;
 import com.localmind.llm.service.ModelProfileRegistry;
 import com.localmind.support.OfflineModelCatalog;
 import com.localmind.tools.config.SearxngProperties;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
+import org.springframework.web.client.RestClient;
 
 /**
  * Unit tests for {@link ToolSelector}: no tools for unsupported models or when not requested, document search only with
@@ -32,7 +34,7 @@ class ToolSelectorTest {
 
     @BeforeEach
     void setUp() {
-        registry.registerProfile(com.localmind.llm.model.ModelProfile.generic("qwen2.5:7b", true));
+        registry.registerProfile(ModelProfile.generic("qwen2.5:7b", true));
     }
 
     private static ToolCallback dummyCallback(String name) {
@@ -63,7 +65,7 @@ class ToolSelectorTest {
     };
 
     private final WebSearchTools webSearchTools = new WebSearchTools(
-            org.springframework.web.client.RestClient.create(), new SearxngProperties("http://localhost:8081")) {
+            RestClient.create(), new SearxngProperties("http://localhost:8081")) {
         @Override
         public ToolCallback toolCallback() {
             return webSearchCb;

@@ -7,9 +7,9 @@ import com.localmind.attachment.entity.Attachment;
 import com.localmind.attachment.repository.AttachmentRepository;
 import com.localmind.attachment.storage.FileStorageService;
 import com.localmind.common.ai.VectorFilters;
+import com.localmind.support.RecordingVectorStore;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,8 +19,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
@@ -39,43 +37,12 @@ class DocumentEtlServiceTest {
     @Mock
     private FileStorageService fileStorageService;
 
-    private TestVectorStore vectorStore;
+    private RecordingVectorStore vectorStore;
     private DocumentEtlService documentEtlService;
-
-    static class TestVectorStore implements VectorStore {
-        final List<Document> addedDocuments = new ArrayList<>();
-        final List<Filter.Expression> deleteFilters = new ArrayList<>();
-        int filterDeletes;
-        boolean failAfterFirstDocument;
-
-        @Override
-        public void add(List<Document> documents) {
-            if (failAfterFirstDocument) {
-                addedDocuments.add(documents.getFirst());
-                throw new IllegalStateException("Qdrant unavailable");
-            }
-            addedDocuments.addAll(documents);
-        }
-
-        @Override
-        public void delete(List<String> idList) {
-        }
-
-        @Override
-        public void delete(Filter.Expression filterExpression) {
-            filterDeletes++;
-            deleteFilters.add(filterExpression);
-        }
-
-        @Override
-        public List<Document> similaritySearch(SearchRequest request) {
-            return List.of();
-        }
-    }
 
     @BeforeEach
     void setUp() {
-        vectorStore = new TestVectorStore();
+        vectorStore = new RecordingVectorStore();
         documentEtlService = new DocumentEtlService(attachmentRepository, fileStorageService, vectorStore);
     }
 
@@ -97,7 +64,7 @@ class DocumentEtlServiceTest {
 
         documentEtlService.processAttachment(attachmentId);
 
-        List<Document> savedDocs = vectorStore.addedDocuments;
+        List<Document> savedDocs = vectorStore.added();
         assertFalse(savedDocs.isEmpty());
         for (Document doc : savedDocs) {
             assertEquals("user-1", doc.getMetadata().get("userId"));
@@ -110,7 +77,7 @@ class DocumentEtlServiceTest {
 
         verify(attachmentRepository).updateOutcome(attachmentId, Attachment.Status.READY, savedDocs.size(), null);
         verify(attachmentRepository, never()).save(any());
-        assertEquals(0, vectorStore.filterDeletes);
+        assertEquals(0, vectorStore.deleteFilters().size());
     }
 
     @Test
@@ -134,7 +101,7 @@ class DocumentEtlServiceTest {
         verify(attachmentRepository).updateOutcome(eq(attachmentId), eq(Attachment.Status.FAILED), eq(0),
                 argThat(message -> message.startsWith("The document could not be processed")));
         verify(attachmentRepository, never()).save(any());
-        assertTrue(vectorStore.addedDocuments.isEmpty());
+        assertTrue(vectorStore.added().isEmpty());
     }
 
     @Test
@@ -151,23 +118,23 @@ class DocumentEtlServiceTest {
         documentEtlService.processAttachment(attachmentId);
 
         verify(attachmentRepository, never()).save(any());
-        assertFalse(vectorStore.addedDocuments.isEmpty());
-        assertEquals(1, vectorStore.filterDeletes);
+        assertFalse(vectorStore.added().isEmpty());
+        assertEquals(1, vectorStore.deleteFilters().size());
     }
 
     @Test
     @DisplayName("processAttachment() should delete the chunks of the attachment when indexing fails part-way")
     void partialIndexingFailureDeletesWrittenChunks() {
         Attachment attachment = readableAttachment("att-partial");
-        vectorStore.failAfterFirstDocument = true;
+        vectorStore.failOnAddAfterFirstDocument(new IllegalStateException("Qdrant unavailable"));
         when(attachmentRepository.updateOutcome(eq("att-partial"), eq(Attachment.Status.FAILED), eq(0), anyString()))
                 .thenReturn(1);
 
         documentEtlService.processAttachment(attachment.getId());
 
-        assertFalse(vectorStore.addedDocuments.isEmpty());
+        assertFalse(vectorStore.added().isEmpty());
         assertEquals(List.of(VectorFilters.attachmentChunks(attachment.getUserId(), attachment.getId()).toString()),
-                vectorStore.deleteFilters.stream().map(Filter.Expression::toString).toList());
+                vectorStore.deleteFilters().stream().map(Filter.Expression::toString).toList());
         verify(attachmentRepository, never()).updateOutcome(any(), eq(Attachment.Status.READY), anyInt(), any());
     }
 
@@ -182,9 +149,9 @@ class DocumentEtlServiceTest {
 
         documentEtlService.processAttachment(attachment.getId());
 
-        assertFalse(vectorStore.addedDocuments.isEmpty());
+        assertFalse(vectorStore.added().isEmpty());
         assertEquals(List.of(VectorFilters.attachmentChunks(attachment.getUserId(), attachment.getId()).toString()),
-                vectorStore.deleteFilters.stream().map(Filter.Expression::toString).toList());
+                vectorStore.deleteFilters().stream().map(Filter.Expression::toString).toList());
         verify(attachmentRepository).updateOutcome(eq("att-ready-fails"), eq(Attachment.Status.FAILED), eq(0),
                 anyString());
     }
@@ -200,7 +167,7 @@ class DocumentEtlServiceTest {
 
         verify(attachmentRepository).updateOutcome(eq("att-db-down"), eq(Attachment.Status.FAILED), eq(0),
                 anyString());
-        assertEquals(1, vectorStore.filterDeletes);
+        assertEquals(1, vectorStore.deleteFilters().size());
     }
 
     @Test

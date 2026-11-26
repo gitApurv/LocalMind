@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 import com.localmind.chat.prompt.token.CharacterTokenCounter;
 import com.localmind.chat.prompt.token.TokenCounter;
 import com.localmind.memory.repository.UserMemoryRepository;
+import com.localmind.support.RecordingVectorStore;
 import com.localmind.support.TestProperties;
 import java.util.List;
 import java.util.Map;
@@ -16,33 +17,14 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 
 /**
  * Unit tests for {@link MemoryRetrievalAdvisor}: retrieved memories appended to the system message and the unchanged
  * request when vector search fails.
  */
 class MemoryRetrievalAdvisorTest {
-    static class TestVectorStore implements VectorStore {
-        List<Document> simResults = List.of();
 
-        @Override
-        public void add(List<Document> documents) {
-        }
-        @Override
-        public void delete(List<String> idList) {
-        }
-        @Override
-        public void delete(org.springframework.ai.vectorstore.filter.Filter.Expression filterExpression) {
-        }
-        @Override
-        public List<Document> similaritySearch(SearchRequest request) {
-            return simResults;
-        }
-    }
-
-    private final TestVectorStore vectorStore = new TestVectorStore();
+    private final RecordingVectorStore vectorStore = new RecordingVectorStore();
     private final UserMemoryRepository memoryRepository = mock(UserMemoryRepository.class);
     private final TokenCounter tokenCounter = new CharacterTokenCounter();
     private final MemoryRetrievalAdvisor advisor = new MemoryRetrievalAdvisor(vectorStore, memoryRepository,
@@ -50,8 +32,8 @@ class MemoryRetrievalAdvisorTest {
 
     @Test
     void augmentsSystemMessageWithRetrievedMemories() {
-        vectorStore.simResults = List
-                .of(new Document("User prefers dark mode", Map.of("type", "USER_MEMORY", "userId", "u1")));
+        vectorStore.returnOnSearch(List
+                .of(new Document("User prefers dark mode", Map.of("type", "USER_MEMORY", "userId", "u1"))));
 
         ChatClientRequest request = ChatClientRequest.builder()
                 .prompt(new Prompt(List.of(new SystemMessage("Base rules"), new UserMessage("What theme do I like?"))))
@@ -67,12 +49,10 @@ class MemoryRetrievalAdvisorTest {
 
     @Test
     void returnsRequestUnchangedWhenVectorSearchFails() {
-        MemoryRetrievalAdvisor failing = new MemoryRetrievalAdvisor(new TestVectorStore() {
-            @Override
-            public List<Document> similaritySearch(SearchRequest request) {
-                throw new IllegalStateException("Qdrant unavailable");
-            }
-        }, memoryRepository, tokenCounter, TestProperties.promptDefaults());
+        RecordingVectorStore failingStore = new RecordingVectorStore();
+        failingStore.failOnSearch(new IllegalStateException("Qdrant unavailable"));
+        MemoryRetrievalAdvisor failing = new MemoryRetrievalAdvisor(failingStore, memoryRepository, tokenCounter,
+                TestProperties.promptDefaults());
         ChatClientRequest request = ChatClientRequest.builder().prompt(new Prompt("What do I like?"))
                 .context(Map.of("userId", "u1")).build();
 

@@ -134,6 +134,13 @@ beans from calling Ollama or Qdrant, so every non-live `@SpringBootTest` also ca
 `QdrantClient`, `VectorStore`, `EmbeddingModel`, `ChatModel`, `ModelCatalogService` and `OllamaVersionCheck` with
 Mockito mocks. The startup probes then do nothing and no test opens a connection to either service.
 
+Unit tests share hand-written doubles from `support/` instead of declaring their own:
+[`RecordingVectorStore`](../../backend/src/test/java/com/localmind/support/RecordingVectorStore.java) (records adds,
+searches and filter deletes, returns canned results, can fail on add or search),
+[`StubChatModel`](../../backend/src/test/java/com/localmind/support/StubChatModel.java) (canned `call` reply and
+`stream` chunks, keeps the last prompt) and
+[`OfflineModelCatalog`](../../backend/src/test/java/com/localmind/support/OfflineModelCatalog.java).
+
 ## Docker images
 
 Compose pins every image through a `*_IMAGE_TAG` variable: `mysql:8.4`, `qdrant/qdrant:v1.20.1`,
