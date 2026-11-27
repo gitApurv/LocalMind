@@ -194,7 +194,7 @@ Advisors never fail a turn. Each implements `apply()`; `PromptAdvisor#before` (t
 
 ### Token counting
 
-`CharacterTokenCounter.estimate`: `0` for `null`/empty, otherwise `max(1, length / 4)`. It is a character heuristic, not a tokenizer. Used by `HistoryTrimmer`, `AutoRagAdvisor`, `MemoryRetrievalAdvisor`, `PromptStatsAdvisor` and `ChatOrchestratorService` (`token_count`, floored at 1).
+`CharacterTokenCounter.estimate`: `0` for `null`/empty, otherwise `max(1, length / 4)`. It is a character heuristic, not a tokenizer. Used by `HistoryTrimmer`, `AutoRagAdvisor`, `MemoryRetrievalAdvisor`, `PromptStatsAdvisor`, `ChatOrchestratorService` (user `token_count`) and `ChatTurn` (assistant `token_count`), both floored at 1.
 
 ## Side effects & async work
 
@@ -244,8 +244,8 @@ Validation messages: `Conversation ID must not be blank`, `Conversation ID canno
 
 | Feature | Used | By |
 | --- | --- | --- |
-| conversation | `OwnershipGuard` (`lockOwnedConversation`), `ConversationRepository` (`touch`; `findById` in `HistoryAdvisor` for the summary), `ChatMessageRepository` (`save`, history queries), `AutoTitleService`, `ConversationSummaryService` | `ChatOrchestratorService`, `HistoryAdvisor` |
-| llm | `LlmProperties.resolveModel`, `ModelProfileRegistry.getProfile`, `ModelCatalogService.supportsTools`, `ModelProfile` | `ChatOrchestratorService`, `ToolSelector`, advisors |
+| conversation | `OwnershipGuard` (`lockOwnedConversation`), `ConversationRepository` (`touch`; `findById` in `HistoryAdvisor` for the summary), `ChatMessageRepository` (`save`, history queries), `AutoTitleService`, `ConversationSummaryService` | `ChatOrchestratorService` (ownership, user message), `ChatTurn` (assistant message, `touch`, title), `HistoryAdvisor` |
+| llm | `LlmProperties.resolveModel`, `ModelProfileRegistry.getProfile`, `ModelCatalogService.supportsTools`, `ModelProfile` | `ChatOrchestratorService`, `ChatTurn`, `ToolSelector`, advisors |
 | tools | `DateTimeTools`, `MathTools`, `UserMemoryTools`, `WebSearchTools`, `WebScraperTools`, `DocumentSearchTools` (`toolCallback()`) | `ToolSelector` |
 | attachment | `AttachmentRepository.existsByConversationIdAndStatus(.., READY)` | `ToolSelector`, `AutoRagAdvisor` |
 | memory | `UserMemoryRepository.findByUserIdAndPinnedTrue` | `PromptStructureAdvisor`, `MemoryRetrievalAdvisor` |

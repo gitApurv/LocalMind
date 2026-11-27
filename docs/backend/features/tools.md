@@ -67,7 +67,7 @@ returns no tools when `toolsRequested` is `false` or `ModelCatalogService.suppor
 returns, in order: `getCurrentDateTime`, `calculateExpression`, `saveUserMemory`, `recallUserMemories`, `searchWeb`; plus
 `readWebPage` if the lower-cased message contains `http://`, `https://` or `www.`; plus `searchUploadedDocs` if
 `conversationId != null` and `AttachmentRepository.existsByConversationIdAndStatus(conversationId, READY)`.
-`ChatOrchestratorService` wraps each in `MonitoredToolCallback` (at most 5 executed calls per turn, shared across tools)
+`ChatTurn` wraps each in `MonitoredToolCallback` (at most 5 executed calls per turn, shared across tools)
 and sets the tool context to `{userId, conversationId}`. Details live in the chat feature page.
 
 ### `getCurrentDateTime`
@@ -321,7 +321,7 @@ No `ApiException` is thrown; every tool failure is a string returned to the mode
 - Uses: `memory.entity.UserMemory`, `memory.repository.UserMemoryRepository`; `common.ai.ChatContextKeys`,
   `VectorFilters`, `VectorMetadata`, `VectorSearchDefaults`; `common.transaction.TransactionHooks`; `common.config.WebMvcConfig#shortTimeoutRestClient`; Spring AI `VectorStore`
   (Qdrant, documents written by the `attachment` ETL).
-- Used by: `chat.service.ToolSelector` (selects callbacks) and `chat.service.ChatOrchestratorService` (wraps them in
+- Used by: `chat.service.ToolSelector` (selects callbacks) and `chat.service.ChatTurn` (wraps them in
   `MonitoredToolCallback`, supplies the tool context).
 
 ## Tests

@@ -82,8 +82,8 @@ No entities.
 | Field | Meaning | Consumer |
 | --- | --- | --- |
 | `modelName` | Key name (as registered) | `HistoryAdvisor` (logging) |
-| `numCtx` | Context window sent to Ollama (`num_ctx`) | `ChatOrchestratorService` options, `PromptStatsAdvisor` overflow check |
-| `outputReserve` | Tokens kept for the answer, sent as `num_predict` | `ChatOrchestratorService` options |
+| `numCtx` | Context window sent to Ollama (`num_ctx`) | `ChatTurn` options, `PromptStatsAdvisor` overflow check |
+| `outputReserve` | Tokens kept for the answer, sent as `num_predict` | `ChatTurn` options |
 | `ragBudget` | Tokens for document excerpts | `AutoRagAdvisor` |
 | `historyBudget` | Tokens for conversation history | `HistoryAdvisor` |
 | `toolSupported` | Tool calling offered | `ModelCatalogService.supportsTools` fallback |
@@ -212,7 +212,7 @@ No `ApiException` is thrown by this feature.
 | Direction | Feature | Usage |
 | --- | --- | --- |
 | uses | `common` | `shortTimeoutRestClient` bean from `WebMvcConfig` |
-| used by | `chat` | `ChatOrchestratorService`: `LlmProperties.resolveModel(request.model, conversation.modelName)` and `ModelProfileRegistry.getProfile(model)` (stored in the advisor context as `MODEL_PROFILE`, `numCtx`/`numPredict` options); `ToolSelector`: `ModelCatalogService.supportsTools`; `HistoryAdvisor`, `AutoRagAdvisor`, `PromptStatsAdvisor` read `ModelProfile` budgets |
+| used by | `chat` | `ChatOrchestratorService`: `LlmProperties.resolveModel(request.model, conversation.modelName)` and `ModelProfileRegistry.getProfile(model)`; `ChatTurn`: the profile in the advisor context as `MODEL_PROFILE` and the `numCtx`/`numPredict` options; `ToolSelector`: `ModelCatalogService.supportsTools`; `HistoryAdvisor`, `AutoRagAdvisor`, `PromptStatsAdvisor` read `ModelProfile` budgets |
 | used by | `conversation` | `ConversationService.createConversation`, `AutoTitleService`, `ConversationSummaryService`: `LlmProperties.resolveModel` only |
 
 ## Tests

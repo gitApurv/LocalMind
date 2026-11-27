@@ -82,8 +82,8 @@ attachment feature checks conversation ownership.
 5. **Response**: the DTO is serialised as JSON. Any exception becomes a `ProblemDetail` via
    `GlobalExceptionHandler` (see [errors.md](errors.md)).
 
-Chat requests differ after step 2: the controller returns an SSE stream and `ChatOrchestratorService` keeps working
-after the servlet thread is released. See [flows/chat-streaming.md](flows/chat-streaming.md).
+Chat requests differ after step 2: the controller returns an SSE stream and the `ChatTurn` that
+`ChatOrchestratorService` creates keeps working after the servlet thread is released. See [flows/chat-streaming.md](flows/chat-streaming.md).
 
 ## Concurrency model
 

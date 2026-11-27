@@ -15,6 +15,7 @@ sequenceDiagram
     participant B as Browser
     participant C as ChatController
     participant O as ChatOrchestratorService
+    participant CT as ChatTurn
     participant DB as MySQL
     participant A as Prompt advisors
     participant Q as Qdrant
@@ -27,28 +28,29 @@ sequenceDiagram
     O->>DB: OwnershipGuard, load conversation
     O->>O: resolve model + ModelProfile
     O->>DB: save USER message
+    O->>CT: new ChatTurn per stream
     O-->>B: 200 text/event-stream (Flux)
-    Note over O: Everything below runs on subscription;<br/>failures become an ERROR event
-    O->>O: ToolSelector picks tools (if model supports them)
-    O->>A: build prompt
+    Note over CT: Everything below runs on subscription;<br/>failures become an ERROR event
+    CT->>CT: ToolSelector picks tools (if model supports them)
+    CT->>A: build prompt
     A->>DB: custom instructions, pinned memories, history, summary
     A->>Q: relevant memories, document chunks
     A-->>BG: summarise turns trimmed from history
     A->>L: stream chat completion
     loop streamed chunks
-        L-->>O: chunk
-        O-->>B: CONTENT / REASONING
+        L-->>CT: chunk
+        CT-->>B: CONTENT / REASONING
         opt model calls a tool (max 5 per turn)
-            O-->>B: TOOL_START
-            O->>T: call with userId, conversationId in tool context
-            T-->>O: result string
-            O-->>B: TOOL_END
+            CT-->>B: TOOL_START
+            CT->>T: call with userId, conversationId in tool context
+            T-->>CT: result string
+            CT-->>B: TOOL_END
         end
     end
-    O->>DB: save ASSISTANT message (content, reasoning, tool calls, token count)
-    O->>DB: touch conversation.updated_at
-    O-->>B: DONE {messageId}
-    O-->>BG: generate title if still "New Chat"
+    CT->>DB: save ASSISTANT message (content, reasoning, tool calls, token count)
+    CT->>DB: touch conversation.updated_at
+    CT-->>B: DONE {messageId}
+    CT-->>BG: generate title if still "New Chat"
 ```
 
 ## Phases

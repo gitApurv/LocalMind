@@ -28,7 +28,7 @@ Every error response from the backend is an [RFC 9457](https://www.rfc-editor.or
 | Missing or invalid token in the filter chain | [`ProblemDetailSecurityHandler`](../../backend/src/main/java/com/localmind/common/security/ProblemDetailSecurityHandler.java) | 401 `Authentication is required to access this resource`; keeps the RFC 6750 `WWW-Authenticate` header |
 | Access denied in the filter chain | `ProblemDetailSecurityHandler` | 403 `You do not have access to this resource` |
 | Anything else | `GlobalExceptionHandler#handleUnexpected` | 500 `An unexpected error occurred. Please try again.`; full exception logged |
-| Errors during a chat stream | `ChatOrchestratorService` | Sent as an SSE `ERROR` event, not a `ProblemDetail`; see [chat streaming](flows/chat-streaming.md) |
+| Errors during a chat stream | `ChatTurn` | Sent as an SSE `ERROR` event, not a `ProblemDetail`; see [chat streaming](flows/chat-streaming.md) |
 | Invalid configuration at startup | `@ConfigurationProperties` compact constructors | Not an HTTP error: the application fails to start, e.g. `localmind.storage.allowed-extensions` with a value outside `pdf, txt, docx, md` throws `IllegalArgumentException` |
 
 ## Exception types
